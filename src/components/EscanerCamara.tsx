@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { CheckCircle, CircleNotch, Flashlight, WarningCircle, X } from "@phosphor-icons/react";
+import { CheckCircle, CircleNotch, Flashlight, MagnifyingGlass, PlusCircle, WarningCircle, X } from "@phosphor-icons/react";
 import type { IScannerControls } from "@zxing/browser";
 
-export type ResultadoEscaneo = { ok: boolean; texto: string };
+/** noEncontrado: codigo leido que no existe; el escaner ofrece buscarlo a mano o crear el producto. */
+export type ResultadoEscaneo = { ok: boolean; texto: string; noEncontrado?: string };
 
 // Como un escaner de mano: el mismo codigo se vuelve a contar pasado este tiempo, aunque siga a la vista.
 // Para agregar n unidades se deja el producto frente a la camara (o se vuelve a pasar) n veces.
@@ -47,7 +48,13 @@ let sonidos: { ok: HTMLAudioElement; error: HTMLAudioElement } | null = null;
 export function desbloquearAudio() {
   try {
     sonidos ??= {
-      ok: new Audio(wav([[1500, 0.09], [0, 0.04], [2000, 0.13]])), // "bip-bip" agudo: registrado
+      ok: new Audio(
+        wav([
+          [1500, 0.09],
+          [0, 0.04],
+          [2000, 0.13],
+        ]),
+      ), // "bip-bip" agudo: registrado
       error: new Audio(wav([[300, 0.4]])), // tono grave largo: no registrado
     };
     for (const a of Object.values(sonidos)) {
@@ -112,9 +119,14 @@ function mensajeError(e: unknown) {
 export default function EscanerCamara({
   onCodigo,
   onCerrar,
+  onNoEncontrado,
+  puedeCrear = false,
 }: {
   onCodigo: (codigo: string) => Promise<ResultadoEscaneo>;
   onCerrar: () => void;
+  /** Codigo que no existe: "buscar" cierra el escaner para buscar a mano, "crear" abre el alta del producto. */
+  onNoEncontrado?: (codigo: string, accion: "buscar" | "crear") => void;
+  puedeCrear?: boolean;
 }) {
   const video = useRef<HTMLVideoElement>(null);
   const controles = useRef<IScannerControls | null>(null);
@@ -145,7 +157,8 @@ export default function EscanerCamara({
           audio: false,
           video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
         });
-        const [{ BrowserMultiFormatReader, HTMLCanvasElementLuminanceSource }, { BarcodeFormat, DecodeHintType }] = await precargarEscaner();
+        const [{ BrowserMultiFormatReader, HTMLCanvasElementLuminanceSource }, { BarcodeFormat, DecodeHintType }] =
+          await precargarEscaner();
         // Bug de @zxing/browser (tempCanvasElement queda undefined y compara con null):
         // sin esto TRY_HARDER falla al rotar y llena la consola de "Could not create a Canvas element".
         (HTMLCanvasElementLuminanceSource.prototype as unknown as { tempCanvasElement: null }).tempCanvasElement ??= null;
@@ -165,38 +178,34 @@ export default function EscanerCamara({
         // Si el efecto ya se desmonto (StrictMode monta dos veces) no se toca el <video>:
         // al detenerse limpiaria el srcObject del montaje vivo y la camara quedaria en negro.
         if (cancelado || !video.current) return stream.getTracks().forEach((t) => t.stop());
-        const c = await lector.decodeFromStream(
-          stream,
-          video.current,
-          async (resultado) => {
-            if (!resultado) return;
-            const codigo = resultado.getText().trim();
-            const ahora = Date.now();
-            if (ocupado.current) return;
-            const repetido = codigo === ultimo.current.codigo;
-            if (repetido && ahora - ultimo.current.t < PAUSA_MISMO_CODIGO_MS) return;
-            const veces = repetido ? ultimo.current.veces + 1 : 1;
-            ultimo.current = { codigo, t: ahora, veces };
-            ocupado.current = true;
-            setProcesando(true);
-            let r: ResultadoEscaneo;
-            try {
-              r = await onCodigoRef.current(codigo);
-            } catch (e) {
-              r = { ok: false, texto: (e as Error).message };
-            }
-            pitido(r.ok);
-            try {
-              navigator.vibrate?.(r.ok ? 40 : [60, 60, 60]);
-            } catch {}
-            if (r.ok) setAgregados((n) => n + 1);
-            setAviso({ ...r, id: ahora, veces: r.ok ? veces : 1 });
-            setProcesando(false);
-            // La pausa cuenta desde que termina de agregarse; si fallo, la racha de "veces" se reinicia.
-            ultimo.current = { codigo, t: Date.now(), veces: r.ok ? veces : 0 };
-            ocupado.current = false;
+        const c = await lector.decodeFromStream(stream, video.current, async (resultado) => {
+          if (!resultado) return;
+          const codigo = resultado.getText().trim();
+          const ahora = Date.now();
+          if (ocupado.current) return;
+          const repetido = codigo === ultimo.current.codigo;
+          if (repetido && ahora - ultimo.current.t < PAUSA_MISMO_CODIGO_MS) return;
+          const veces = repetido ? ultimo.current.veces + 1 : 1;
+          ultimo.current = { codigo, t: ahora, veces };
+          ocupado.current = true;
+          setProcesando(true);
+          let r: ResultadoEscaneo;
+          try {
+            r = await onCodigoRef.current(codigo);
+          } catch (e) {
+            r = { ok: false, texto: (e as Error).message };
           }
-        );
+          pitido(r.ok);
+          try {
+            navigator.vibrate?.(r.ok ? 40 : [60, 60, 60]);
+          } catch {}
+          if (r.ok) setAgregados((n) => n + 1);
+          setAviso({ ...r, id: ahora, veces: r.ok ? veces : 1 });
+          setProcesando(false);
+          // La pausa cuenta desde que termina de agregarse; si fallo, la racha de "veces" se reinicia.
+          ultimo.current = { codigo, t: Date.now(), veces: r.ok ? veces : 0 };
+          ocupado.current = false;
+        });
         if (cancelado) return c.stop();
         controles.current = c;
         const capacidades = c.streamVideoCapabilitiesGet?.((t) => [t]) as (MediaTrackCapabilities & { torch?: boolean }) | undefined;
@@ -257,7 +266,11 @@ export default function EscanerCamara({
       )}
 
       <header className="pt-seguro relative flex items-center gap-3 bg-gradient-to-b from-black/70 to-transparent px-4 pb-6">
-        <button onClick={onCerrar} className="flex h-10 w-10 items-center justify-center rounded-full bg-white/15" aria-label="Cerrar escáner">
+        <button
+          onClick={onCerrar}
+          className="flex h-10 w-10 items-center justify-center rounded-full bg-white/15"
+          aria-label="Cerrar escáner"
+        >
           <X size={22} weight="bold" />
         </button>
         <div className="min-w-0 flex-1">
@@ -307,11 +320,32 @@ export default function EscanerCamara({
                   aviso.ok ? "bg-exito text-white" : "bg-peligro text-white"
                 }`}
               >
-                {aviso.ok ? <CheckCircle size={20} weight="fill" className="shrink-0" /> : <WarningCircle size={20} weight="fill" className="shrink-0" />}
+                {aviso.ok ? (
+                  <CheckCircle size={20} weight="fill" className="shrink-0" />
+                ) : (
+                  <WarningCircle size={20} weight="fill" className="shrink-0" />
+                )}
                 <span className="line-clamp-2 flex-1">{aviso.texto}</span>
-                {aviso.veces > 1 && <span className="shrink-0 rounded-full bg-white/25 px-2 py-0.5 text-base tabular-nums">×{aviso.veces}</span>}
+                {aviso.veces > 1 && (
+                  <span className="shrink-0 rounded-full bg-white/25 px-2 py-0.5 text-base tabular-nums">×{aviso.veces}</span>
+                )}
               </p>
             )
+          )}
+          {!procesando && aviso && !aviso.ok && aviso.noEncontrado && onNoEncontrado && (
+            <div className={`anim-aparecer mt-2 grid gap-2 ${puedeCrear ? "grid-cols-2" : "grid-cols-1"}`}>
+              <button
+                onClick={() => onNoEncontrado(aviso.noEncontrado!, "buscar")}
+                className="btn border border-white/40 bg-white/15 py-2.5 text-sm text-white"
+              >
+                <MagnifyingGlass size={18} weight="bold" /> Buscar a mano
+              </button>
+              {puedeCrear && (
+                <button onClick={() => onNoEncontrado(aviso.noEncontrado!, "crear")} className="btn bg-white py-2.5 text-sm text-texto">
+                  <PlusCircle size={18} weight="bold" /> Crear producto
+                </button>
+              )}
+            </div>
           )}
         </div>
         <button onClick={onCerrar} className="btn mx-auto flex w-full max-w-sm bg-white py-3.5 text-base text-texto">

@@ -21,6 +21,7 @@ import {
   Package,
   PencilSimple,
   Plus,
+  PlusCircle,
   Printer,
   Receipt,
   Scales,
@@ -237,7 +238,7 @@ export default function PuntoVenta({ ctx }: { ctx: ContextoVenta }) {
           )}
         </div>
 
-        <BuscadorProductos onAgregar={agregar} />
+        <BuscadorProductos onAgregar={agregar} puedeCrear={ctx.puedeCrearProductos} ivaPorDefecto={ctx.ivaPorDefecto} />
 
         {lineas.length === 0 ? (
           <div className="flex flex-col items-center gap-2 rounded-lg border-2 border-dashed border-borde px-6 py-10 text-center">
@@ -486,7 +487,16 @@ function Cantidad({ valor, onChange, onQuitar }: { valor: number; onChange: (n: 
   );
 }
 
-function BuscadorProductos({ onAgregar }: { onAgregar: (p: Producto) => void }) {
+function BuscadorProductos({
+  onAgregar,
+  puedeCrear,
+  ivaPorDefecto,
+}: {
+  onAgregar: (p: Producto) => void;
+  /** Permiso Productos: permite crear el producto cuando no existe. */
+  puedeCrear: boolean;
+  ivaPorDefecto: boolean;
+}) {
   const [q, setQ] = useState("");
   const [res, setRes] = useState<Producto[]>([]);
   const [cargando, setCargando] = useState(false);
@@ -494,6 +504,7 @@ function BuscadorProductos({ onAgregar }: { onAgregar: (p: Producto) => void }) 
   const seq = useRef(0);
   const input = useRef<HTMLInputElement>(null);
   const [camara, setCamara] = useState(false);
+  const [nuevo, setNuevo] = useState<{ codigo: string; descripcion: string } | null>(null);
 
   // La libreria del escaner se descarga en segundo plano para que la camara abra sin espera.
   useEffect(() => {
@@ -556,10 +567,28 @@ function BuscadorProductos({ onAgregar }: { onAgregar: (p: Producto) => void }) 
   async function porCamara(codigo: string): Promise<ResultadoEscaneo> {
     const r = await api<Producto[]>(`/api/productos?q=${encodeURIComponent(codigo)}`);
     const exacto = r.find((p) => p.balanza || p.Codigo.trim().toLowerCase() === codigo.toLowerCase());
-    if (!exacto) return { ok: false, texto: `Código ${codigo} no registrado` };
+    if (!exacto) return { ok: false, texto: `Código ${codigo} no registrado`, noEncontrado: codigo };
     onAgregar(exacto);
     const peso = exacto.balanza ? ` · ${exacto.balanza.cantidad.toLocaleString("es-EC", { minimumFractionDigits: 3 })}` : "";
     return { ok: true, texto: `${exacto.Descripcion}${peso}` };
+  }
+
+  // El escaner leyo un codigo que no existe: buscarlo a mano por nombre o crear el producto con ese codigo.
+  function noEncontrado(codigo: string, accion: "buscar" | "crear") {
+    setCamara(false);
+    if (accion === "crear") {
+      setNuevo({ codigo, descripcion: "" });
+      return;
+    }
+    limpiar();
+    setTimeout(() => input.current?.focus(), 50);
+  }
+
+  // Desde la busqueda sin resultados: si parece un codigo (sin espacios y con numeros) va como codigo, si no como nombre.
+  function crearDesdeBusqueda() {
+    const texto = q.trim();
+    const pareceCodigo = !/\s/.test(texto) && /\d/.test(texto);
+    setNuevo(pareceCodigo ? { codigo: texto, descripcion: "" } : { codigo: "", descripcion: texto });
   }
 
   const abierto = q.trim().length >= 2;
@@ -597,7 +626,10 @@ function BuscadorProductos({ onAgregar }: { onAgregar: (p: Producto) => void }) 
         </form>
         <button
           type="button"
-          onClick={() => { desbloquearAudio(); setCamara(true); }}
+          onClick={() => {
+            desbloquearAudio();
+            setCamara(true);
+          }}
           className="btn-primario shrink-0 flex-col gap-0.5 px-3 py-1.5 text-[11px]"
           aria-label="Escanear con la cámara"
         >
@@ -605,7 +637,20 @@ function BuscadorProductos({ onAgregar }: { onAgregar: (p: Producto) => void }) 
           Escanear
         </button>
       </div>
-      {camara && <EscanerCamara onCodigo={porCamara} onCerrar={() => setCamara(false)} />}
+      {camara && (
+        <EscanerCamara onCodigo={porCamara} onCerrar={() => setCamara(false)} onNoEncontrado={noEncontrado} puedeCrear={puedeCrear} />
+      )}
+      {nuevo && (
+        <HojaNuevoProducto
+          inicial={nuevo}
+          ivaPorDefecto={ivaPorDefecto}
+          onCerrar={() => setNuevo(null)}
+          onCreado={(p) => {
+            setNuevo(null);
+            elegir(p);
+          }}
+        />
+      )}
       {abierto && (res.length > 0 || error || !cargando) && (
         <ul className="anim-aparecer absolute inset-x-0 top-full z-10 mt-1 max-h-[55dvh] divide-y divide-borde overflow-y-auto rounded-lg border border-borde bg-white shadow-xl">
           {error && (
@@ -614,7 +659,18 @@ function BuscadorProductos({ onAgregar }: { onAgregar: (p: Producto) => void }) 
             </li>
           )}
           {!error && !cargando && res.length === 0 && (
-            <li className="p-4 text-center text-sm text-gris">Sin resultados para “{q.trim()}”</li>
+            <li className="p-4 text-center text-sm text-gris">
+              Sin resultados para “{q.trim()}”
+              {puedeCrear ? (
+                <button onClick={crearDesdeBusqueda} className="btn-secundario mt-3 w-full border-marca/40 py-2.5 text-marca-oscuro">
+                  <PlusCircle size={18} weight="bold" /> Crear producto
+                </button>
+              ) : (
+                <span className="mt-1 block text-xs">
+                  Pruebe con otra parte del nombre. Para crear productos pida el permiso a un administrador.
+                </span>
+              )}
+            </li>
           )}
           {res.map((p) => (
             <li key={p.IDProducto}>
@@ -649,6 +705,133 @@ function BuscadorProductos({ onAgregar }: { onAgregar: (p: Producto) => void }) 
         </ul>
       )}
     </div>
+  );
+}
+
+/** Alta rapida de un producto que no existe (codigo escaneado o buscado), y se agrega a la venta. */
+function HojaNuevoProducto({
+  inicial,
+  ivaPorDefecto,
+  onCerrar,
+  onCreado,
+}: {
+  inicial: { codigo: string; descripcion: string };
+  ivaPorDefecto: boolean;
+  onCerrar: () => void;
+  onCreado: (p: Producto) => void;
+}) {
+  const [codigo, setCodigo] = useState(inicial.codigo);
+  const [descripcion, setDescripcion] = useState(inicial.descripcion);
+  const [precio, setPrecio] = useState("");
+  const [aplicaIVA, setAplicaIVA] = useState(ivaPorDefecto);
+  const [unidad, setUnidad] = useState<"UNIDAD" | "KG" | "LB">("UNIDAD");
+  const [error, setError] = useState<string | null>(null);
+  const [guardando, setGuardando] = useState(false);
+
+  async function guardar(e: React.FormEvent) {
+    e.preventDefault();
+    setGuardando(true);
+    setError(null);
+    try {
+      const p = await api<Producto>("/api/productos", {
+        method: "POST",
+        body: JSON.stringify({ codigo, descripcion, precio: num(precio), aplicaIVA, unidad }),
+      });
+      onCreado(p);
+    } catch (err) {
+      setError((err as Error).message);
+      setGuardando(false);
+    }
+  }
+
+  return (
+    <Hoja titulo="Nuevo producto" onCerrar={guardando ? () => {} : onCerrar}>
+      <form onSubmit={guardar} className="space-y-3 pb-4">
+        <p className="text-sm text-gris">Se guarda en el catálogo de InventX y se agrega a esta venta.</p>
+        <Campo label="Código" id="np-codigo">
+          <div className="relative">
+            <Barcode size={20} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gris" />
+            <input
+              id="np-codigo"
+              className="campo num pl-10"
+              maxLength={50}
+              value={codigo}
+              onChange={(e) => setCodigo(e.target.value.replace(/\s/g, ""))}
+              required
+              autoFocus={!inicial.codigo}
+            />
+          </div>
+        </Campo>
+        <Campo label="Descripción" id="np-desc">
+          <input
+            id="np-desc"
+            className="campo uppercase"
+            maxLength={700}
+            value={descripcion}
+            onChange={(e) => setDescripcion(e.target.value)}
+            required
+            autoFocus={!!inicial.codigo}
+          />
+        </Campo>
+        <Campo label="Precio de venta (incluye IVA)" id="np-precio">
+          <input
+            id="np-precio"
+            className="campo num"
+            inputMode="decimal"
+            placeholder="0.00"
+            value={precio}
+            onChange={(e) => setPrecio(e.target.value)}
+            required
+          />
+        </Campo>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <span className="mb-1 block text-sm font-semibold text-[#696969]">IVA</span>
+            <div className="grid grid-cols-2 gap-1 rounded-lg bg-fondo p-1 text-sm font-semibold">
+              {[true, false].map((v) => (
+                <button
+                  key={String(v)}
+                  type="button"
+                  onClick={() => setAplicaIVA(v)}
+                  className={`rounded-md py-2 ${aplicaIVA === v ? "bg-white text-marca-oscuro shadow-sm" : "text-gris"}`}
+                >
+                  {v ? "Grava" : "0%"}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <span className="mb-1 block text-sm font-semibold text-[#696969]">Se vende por</span>
+            <div className="grid grid-cols-3 gap-1 rounded-lg bg-fondo p-1 text-sm font-semibold">
+              {(["UNIDAD", "KG", "LB"] as const).map((u) => (
+                <button
+                  key={u}
+                  type="button"
+                  onClick={() => setUnidad(u)}
+                  className={`rounded-md py-2 ${unidad === u ? "bg-white text-marca-oscuro shadow-sm" : "text-gris"}`}
+                >
+                  {u === "UNIDAD" ? "Unid." : u.toLowerCase()}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+        {error && (
+          <p className="flex items-start gap-2 rounded-md bg-peligro/8 px-3 py-2 text-sm text-peligro">
+            <WarningCircle size={18} className="mt-px shrink-0" /> {error}
+          </p>
+        )}
+        <div className="grid grid-cols-2 gap-2">
+          <button type="button" className="btn-secundario" onClick={onCerrar} disabled={guardando}>
+            Cancelar
+          </button>
+          <button className="btn-primario" disabled={guardando || !(num(precio) > 0)}>
+            {guardando ? <CircleNotch size={20} className="animate-spin" /> : <PlusCircle size={20} weight="bold" />}
+            {guardando ? "Guardando..." : "Crear y agregar"}
+          </button>
+        </div>
+      </form>
+    </Hoja>
   );
 }
 

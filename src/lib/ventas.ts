@@ -180,6 +180,8 @@ export async function getContextoVenta(sesion: Sesion) {
     cajaAbierta: await cajaAbierta(pa, p[PARAM.CONTROL_CAJA] === "1"),
     puedeRegistrar: tiene(sesion, PERMISO.VENTAS_REGISTRAR),
     puedeEditarClientes: tiene(sesion, PERMISO.CLIENTES),
+    puedeCrearProductos: tiene(sesion, PERMISO.PRODUCTOS),
+    ivaPorDefecto: p[PARAM.IVA_POR_DEFECTO] === "1",
   };
 }
 
