@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { DownloadSimple, Export, PlusSquare, X } from "@phosphor-icons/react";
+import { ArrowCircleUp, DownloadSimple, Export, PlusSquare, WifiSlash, X } from "@phosphor-icons/react";
 
 type EventoInstalar = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: string }> };
 
@@ -12,6 +12,82 @@ export function RegistrarServiceWorker() {
     navigator.serviceWorker.register("/sw.js", { scope: "/", updateViaCache: "none" }).catch(() => {});
   }, []);
   return null;
+}
+
+/**
+ * Vigila el servidor y las versiones publicadas (la PWA instalada no se recarga sola):
+ * - Servidor caido: muestra "Recargar" y reintenta solo cada pocos segundos; al volver quita el aviso
+ *   (y si se estaba en la pantalla "Sin conexion", recarga para mostrar la pagina real).
+ * - Version nueva: recarga sola, salvo en "Nueva venta" donde solo avisa para no perder el carrito.
+ * Revisa al volver a la app, al recuperar la red y cada minuto mientras esta visible.
+ */
+export function VigilanteApp() {
+  const [estado, setEstado] = useState<"ok" | "caido" | "nueva">("ok");
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let fallos = 0;
+    let activo = true;
+    const enVenta = () => location.pathname.startsWith("/ventas/nueva");
+    const enPantallaOffline = () => !!document.querySelector("[data-sin-conexion]");
+
+    async function revisar() {
+      clearTimeout(timer);
+      if (!activo || document.hidden) return; // se retoma con visibilitychange
+      let version: string | undefined;
+      try {
+        const r = await fetch("/api/version", { cache: "no-store" });
+        // 502-504: Caddy/Tailscale responden pero Next no esta corriendo
+        if (r.status >= 500) throw new Error(String(r.status));
+        version = (await r.json()).version;
+      } catch {
+        fallos++;
+        setEstado("caido");
+        timer = setTimeout(revisar, Math.min(2000 * fallos, 10000));
+        return;
+      }
+      fallos = 0;
+      if (enPantallaOffline()) return location.reload();
+      if (version && version !== process.env.VERSION_APP) {
+        if (!enVenta()) return location.reload();
+        setEstado("nueva");
+      } else setEstado("ok");
+      timer = setTimeout(revisar, 60_000);
+    }
+
+    const alVolver = () => {
+      if (document.visibilityState === "visible") revisar();
+    };
+    document.addEventListener("visibilitychange", alVolver);
+    window.addEventListener("online", revisar);
+    revisar();
+    return () => {
+      activo = false;
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", alVolver);
+      window.removeEventListener("online", revisar);
+    };
+  }, []);
+
+  if (estado === "ok") return null;
+  const caido = estado === "caido";
+  return (
+    <div
+      role="status"
+      className="anim-aparecer fixed inset-x-0 top-[max(env(safe-area-inset-top),0.5rem)] z-[80] flex justify-center px-4 print:hidden"
+    >
+      <div className="flex w-full max-w-md items-center gap-3 rounded-2xl bg-[#1c1c1e]/85 py-2 pl-4 pr-2 text-white shadow-xl backdrop-blur-xl backdrop-saturate-150">
+        {caido ? <WifiSlash size={20} className="shrink-0" /> : <ArrowCircleUp size={20} className="shrink-0" />}
+        <div className="min-w-0 flex-1 leading-tight">
+          <p className="text-[13px] font-semibold">{caido ? "Sin conexión con el servidor" : "Hay una versión nueva"}</p>
+          <p className="text-[11px] text-white/70">{caido ? "Reintentando automáticamente…" : "Actualice al terminar esta venta"}</p>
+        </div>
+        <button onClick={() => location.reload()} className="shrink-0 rounded-full bg-white px-3.5 py-1.5 text-[13px] font-semibold text-black active:opacity-70">
+          {caido ? "Recargar" : "Actualizar"}
+        </button>
+      </div>
+    </div>
+  );
 }
 
 // Estado de conexion del dispositivo.

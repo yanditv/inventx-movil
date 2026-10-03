@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Noto_Sans } from "next/font/google";
-import { RegistrarServiceWorker } from "@/components/pwa";
+import { RegistrarServiceWorker, VigilanteApp } from "@/components/pwa";
 import "./globals.css";
 
 // Segoe UI (la fuente del escritorio) no existe en Android; Noto Sans es la alternativa mas cercana.
@@ -23,7 +23,7 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   viewportFit: "cover",
-  themeColor: "#286090",
+  themeColor: "#f9f9f9", // mismo tono que la barra translucida (barra-ios): la barra de estado se funde con ella
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -32,6 +32,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       <body className="min-h-full font-sans">
         {children}
         <RegistrarServiceWorker />
+        <VigilanteApp />
       </body>
     </html>
   );

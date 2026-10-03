@@ -48,12 +48,12 @@ export default async function AjustesPage() {
 
   return (
     <main className="mx-auto min-h-dvh max-w-md pb-10">
-      <header className="barra-marca pt-seguro sticky top-0 z-10 px-4 pb-4 text-white shadow-md">
-        <div className="flex items-center gap-2">
-          <Link href="/ventas" className="-ml-2 flex h-10 w-10 items-center justify-center rounded-lg active:bg-white/15" aria-label="Volver">
+      <header className="barra-ios px-4 pb-2">
+        <div className="grid grid-cols-[2.5rem_1fr_2.5rem] items-center">
+          <Link href="/ventas" className="-ml-2 flex h-10 w-10 items-center justify-center rounded-full text-marca active:bg-black/5" aria-label="Volver">
             <CaretLeft size={24} weight="bold" />
           </Link>
-          <h1 className="text-lg font-bold">Ajustes</h1>
+          <h1 className="text-center text-[17px] font-semibold leading-tight">Ajustes</h1>
         </div>
       </header>
 

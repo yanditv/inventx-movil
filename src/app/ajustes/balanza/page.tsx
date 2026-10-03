@@ -16,14 +16,14 @@ export default async function AsistenteBalanzaPage() {
 
   return (
     <main className="mx-auto min-h-dvh max-w-md pb-10">
-      <header className="barra-marca pt-seguro sticky top-0 z-10 px-4 pb-4 text-white shadow-md">
-        <div className="flex items-center gap-2">
-          <Link href="/ajustes" className="-ml-2 flex h-10 w-10 items-center justify-center rounded-lg active:bg-white/15" aria-label="Volver">
+      <header className="barra-ios px-4 pb-2">
+        <div className="grid grid-cols-[2.5rem_1fr_2.5rem] items-center">
+          <Link href="/ajustes" className="-ml-2 flex h-10 w-10 items-center justify-center rounded-full text-marca active:bg-black/5" aria-label="Volver">
             <CaretLeft size={24} weight="bold" />
           </Link>
-          <div>
-            <h1 className="text-lg font-bold leading-tight">Productos por peso</h1>
-            <p className="text-xs text-white/80">Sugerencias según el nombre</p>
+          <div className="min-w-0 text-center">
+            <h1 className="text-[17px] font-semibold leading-tight">Productos por peso</h1>
+            <p className="text-xs text-gris">Sugerencias según el nombre</p>
           </div>
         </div>
       </header>

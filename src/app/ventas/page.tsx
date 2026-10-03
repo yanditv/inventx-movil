@@ -45,28 +45,29 @@ export default async function VentasPage() {
 
   return (
     <main className="mx-auto min-h-dvh max-w-md pb-32">
-      <header className="barra-marca pt-seguro px-4 pb-16 text-white">
+      <header className="barra-ios px-4 pb-2">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white">
-            <Logo className="h-6 w-6" />
-          </div>
+          <Logo className="h-7 w-7 shrink-0" />
           <div className="min-w-0 flex-1">
-            <p className="truncate text-xs text-white/75">{pa.Empresa}</p>
-            <p className="truncate text-sm font-semibold">{sesion.nombre}</p>
+            <p className="truncate text-[11px] text-gris">{pa.Empresa}</p>
+            <p className="truncate text-[15px] font-semibold leading-tight">{sesion.nombre}</p>
           </div>
           <BotonActualizar />
-          <Link href="/ajustes" className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/15" aria-label="Ajustes">
-            <GearSix size={20} weight="bold" />
+          <Link href="/ajustes" className="flex h-9 w-9 items-center justify-center rounded-full text-marca active:bg-black/5" aria-label="Ajustes">
+            <GearSix size={22} />
           </Link>
         </div>
-
-        <p className="mt-6 text-sm text-white/75">{hoy}</p>
-        <p className="text-xs uppercase tracking-wider text-white/70">Vendido hoy</p>
-        <p className="num text-4xl font-bold tracking-tight">{money(totalDia)}</p>
       </header>
 
-      <section className="-mt-10 px-4">
-        <div className="grid grid-cols-3 divide-x divide-borde rounded-xl bg-white py-3 shadow-lg shadow-marca-oscuro/10">
+      {/* Titulo grande al estilo iOS */}
+      <section className="px-4 pb-4 pt-4">
+        <p className="text-[13px] font-medium uppercase text-gris">{hoy}</p>
+        <h1 className="text-[34px] font-bold leading-tight tracking-tight text-texto">Ventas de hoy</h1>
+        <p className="num mt-1 text-[28px] font-semibold tracking-tight text-marca-oscuro">{money(totalDia)}</p>
+      </section>
+
+      <section className="px-4">
+        <div className="grid grid-cols-3 divide-x divide-borde rounded-xl bg-white py-3">
           <Dato icono={<Receipt size={20} weight="duotone" className="text-marca" />} valor={facturas} texto="Facturas" />
           <Dato icono={<Note size={20} weight="duotone" className="text-[#8f57e6]" />} valor={notas} texto="Notas" />
           <Dato
@@ -148,8 +149,8 @@ export default async function VentasPage() {
       </section>
 
       {puedeVender && (
-        <div className="pb-seguro fixed inset-x-0 bottom-0 z-10 bg-gradient-to-t from-fondo via-fondo/95 to-transparent px-4 pt-6">
-          <Link href="/ventas/nueva" className="btn-primario mx-auto w-full max-w-md py-4 text-lg shadow-lg">
+        <div className="barra-ios-inferior fixed inset-x-0 bottom-0 z-10 px-4 pt-3">
+          <Link href="/ventas/nueva" className="btn-primario mx-auto w-full max-w-md py-3.5 text-[17px]">
             <Plus size={22} weight="bold" /> Nueva venta
           </Link>
         </div>

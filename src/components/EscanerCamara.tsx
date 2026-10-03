@@ -265,7 +265,7 @@ export default function EscanerCamara({
         </div>
       )}
 
-      <header className="pt-seguro relative flex items-center gap-3 bg-gradient-to-b from-black/70 to-transparent px-4 pb-6">
+      <header className="pt-seguro relative flex items-center gap-3 border-b-[0.5px] border-white/15 bg-black/45 px-4 pb-3 backdrop-blur-xl backdrop-saturate-150">
         <button
           onClick={onCerrar}
           className="flex h-10 w-10 items-center justify-center rounded-full bg-white/15"
@@ -306,7 +306,7 @@ export default function EscanerCamara({
         )}
       </div>
 
-      <footer className="pb-seguro relative space-y-3 bg-gradient-to-t from-black/80 to-transparent px-4 pt-8">
+      <footer className="pb-seguro relative space-y-3 border-t-[0.5px] border-white/15 bg-black/45 px-4 pt-3 backdrop-blur-xl backdrop-saturate-150">
         <div className="mx-auto min-h-12 max-w-sm">
           {procesando ? (
             <p className="flex items-center justify-center gap-2 rounded-lg bg-white/15 px-4 py-3 text-sm">

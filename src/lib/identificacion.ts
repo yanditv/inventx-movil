@@ -79,10 +79,15 @@ export function validarIdentificacion(numero: string, tipo: string): Validacion 
   return {};
 }
 
-/** Tipo sugerido segun el numero escrito. */
+/**
+ * Tipo sugerido segun el numero mientras se escribe: solo numeros hasta 10 = cedula (tambien vacio),
+ * mas de 10 = RUC (al borrar el 001 vuelve a cedula), con letras = pasaporte.
+ */
 export function tipoSugerido(numero: string) {
   const id = numero.trim();
-  if (/^\d{13}$/.test(id)) return TIPO.RUC;
-  if (/^\d{10}$/.test(id)) return TIPO.CEDULA;
+  if (/^\d*$/.test(id)) return id.length > 10 ? TIPO.RUC : TIPO.CEDULA;
   return TIPO.PASAPORTE;
 }
+
+/** Tipos que se eligen a mano y se respetan aunque el numero cambie (un pasaporte puede ser solo numeros). */
+export const esTipoManual = (tipo: string) => tipo === TIPO.PASAPORTE || tipo === TIPO.EXTERIOR || tipo === TIPO.PLACA;

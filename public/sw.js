@@ -2,7 +2,7 @@
 // - Recursos estaticos (_next/static, iconos): cache primero.
 // - Paginas: siempre red; sin conexion muestra /offline.
 // - API y acciones: nunca se cachean (datos de ventas en vivo).
-const VERSION = "inventx-v1";
+const VERSION = "inventx-v2";
 const ESTATICO = `${VERSION}-estatico`;
 const PRECACHE = ["/offline", "/icons/icon-192.png", "/icons/icon-512.png", "/manifest.webmanifest"];
 
@@ -48,6 +48,12 @@ self.addEventListener("fetch", (event) => {
   }
 
   if (req.mode === "navigate") {
-    event.respondWith(fetch(req).catch(() => caches.match("/offline")));
+    // Sin red, o 502-504 de Caddy/Tailscale con Next detenido: pantalla "Sin conexion" (se recarga sola al volver).
+    const sinConexion = (res) => caches.match("/offline").then((o) => o || res);
+    event.respondWith(
+      fetch(req)
+        .then((res) => (res.status >= 502 && res.status <= 504 ? sinConexion(res) : res))
+        .catch(() => sinConexion(Response.error()))
+    );
   }
 });

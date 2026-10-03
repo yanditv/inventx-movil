@@ -22,7 +22,8 @@
   --color-exito-claro: #13ea8c;
   --color-peligro: #dd1d56;
   --color-aviso: #f59e0b;
-  --font-sans: "Segoe UI", var(--font-noto), system-ui, -apple-system, Roboto, Arial, sans-serif;
+  /* iPhone/Mac: San Francisco (fuente del sistema, se ve nativa). Windows: Segoe UI. Android: Noto Sans. */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", var(--font-noto), system-ui, Roboto, Arial, sans-serif;
 }
 
 :root {
@@ -35,6 +36,19 @@ body {
   color: var(--color-texto);
   -webkit-tap-highlight-color: transparent;
   overscroll-behavior-y: none;
+  touch-action: manipulation; /* sin zoom por doble toque ni retardo al tocar */
+  -webkit-text-size-adjust: 100%;
+}
+
+/* Como en una app nativa: los controles no se seleccionan ni abren el menu de "mantener presionado" */
+button,
+a,
+[role="tab"],
+img,
+svg {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 
 input,
@@ -85,8 +99,26 @@ textarea {
   background: linear-gradient(150deg, #2a8cff 0%, #8f57e6 48%, #f7208f 100%);
 }
 
-@utility barra-marca {
-  background: linear-gradient(120deg, #286090 0%, #4582b8 55%, #5e94ff 100%);
+/* Barra de navegacion de iOS: material translucido con desenfoque y linea fina inferior.
+   El contenido se ve borroso debajo al hacer scroll, igual que en las apps del sistema. */
+@utility barra-ios {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  padding-top: max(env(safe-area-inset-top), 0.5rem);
+  background: rgb(249 249 249 / 0.8);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  backdrop-filter: saturate(180%) blur(20px);
+  border-bottom: 0.5px solid rgb(0 0 0 / 0.18);
+  color: var(--color-texto);
+}
+
+/* Barra inferior fija. Fondo solido del color de la pagina: Safari (iOS 26+) tiñe su barra de
+   herramientas con el color de lo fijado al borde inferior; si fuera translucido tomaria el azul
+   del boton y la barra de Safari pareceria parte del boton. */
+@utility barra-ios-inferior {
+  padding-bottom: max(env(safe-area-inset-bottom), 0.75rem);
+  background: var(--color-fondo);
 }
 
 @keyframes destello {

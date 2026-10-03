@@ -38,7 +38,7 @@ import {
 import { calcularTotales, money, round, subtotalLinea } from "@/lib/calculos";
 import type { Cliente, ContextoVenta, Producto, TipoDocumento } from "@/lib/ventas";
 import { useEnLinea } from "@/components/pwa";
-import { TIPO, tipoSugerido, validarIdentificacion } from "@/lib/identificacion";
+import { TIPO, esTipoManual, tipoSugerido, validarIdentificacion } from "@/lib/identificacion";
 import { useImprimirAuto } from "@/components/preferencias";
 import BotonImprimir from "@/components/BotonImprimir";
 import EscanerCamara, { desbloquearAudio, precargarEscaner, type ResultadoEscaneo } from "@/components/EscanerCamara";
@@ -153,39 +153,40 @@ export default function PuntoVenta({ ctx }: { ctx: ContextoVenta }) {
 
   return (
     <main className="mx-auto min-h-dvh max-w-md pb-48">
-      <header className="barra-marca pt-seguro sticky top-0 z-20 px-4 pb-3 text-white shadow-md">
-        <div className="flex items-center gap-2">
+      <header className="barra-ios px-4 pb-2.5">
+        <div className="grid grid-cols-[4.5rem_1fr_4.5rem] items-center">
           <button
             onClick={() => (lineas.length ? setHoja("salir") : router.push("/ventas"))}
-            className="-ml-2 flex h-10 w-10 items-center justify-center rounded-lg active:bg-white/15"
+            className="-ml-2 flex h-10 w-10 items-center justify-center rounded-full text-marca active:bg-black/5"
             aria-label="Volver"
           >
             <CaretLeft size={24} weight="bold" />
           </button>
-          <div className="min-w-0 flex-1">
-            <h1 className="text-lg font-bold leading-tight">Nueva venta</h1>
-            <p className="num truncate text-xs text-white/80">
+          <div className="min-w-0 text-center">
+            <h1 className="text-[17px] font-semibold leading-tight">Nueva venta</h1>
+            <p className="num truncate text-xs text-gris">
               {ctx.punto.Descripcion} · {ctx.prefijos[tipo]} {ctx.serie}
             </p>
           </div>
           <Link
             href="/ajustes"
-            className="inline-flex items-center gap-1 rounded-full bg-white/15 px-2.5 py-1 text-xs font-semibold"
+            className="inline-flex items-center justify-self-end gap-1 rounded-full px-1 py-1 text-[13px] font-medium text-marca active:opacity-50"
             title={imprimirAuto ? "Impresión automática activada" : "Impresión manual"}
           >
-            <Printer size={14} weight={imprimirAuto ? "fill" : "regular"} />
+            <Printer size={16} weight={imprimirAuto ? "fill" : "regular"} />
             {imprimirAuto ? "Auto" : "Manual"}
           </Link>
         </div>
-        <div role="tablist" className="mt-3 grid grid-cols-2 gap-1 rounded-lg bg-black/15 p-1 text-sm font-semibold">
+        {/* Control segmentado de iOS */}
+        <div role="tablist" className="mt-2 grid grid-cols-2 gap-0.5 rounded-[9px] bg-[#7676801f] p-0.5 text-[13px] font-semibold">
           {(["factura", "nota"] as const).map((t) => (
             <button
               key={t}
               role="tab"
               aria-selected={tipo === t}
               onClick={() => setTipo(t)}
-              className={`flex items-center justify-center gap-1.5 rounded-md py-2 transition ${
-                tipo === t ? "bg-white text-marca-oscuro shadow" : "text-white/85"
+              className={`flex items-center justify-center gap-1.5 rounded-[7px] py-1.5 transition ${
+                tipo === t ? "bg-white text-texto shadow-[0_3px_8px_rgba(0,0,0,.12),0_3px_1px_rgba(0,0,0,.04)]" : "text-texto/80"
               }`}
             >
               {t === "factura" ? (
@@ -821,11 +822,11 @@ function HojaNuevoProducto({
             <WarningCircle size={18} className="mt-px shrink-0" /> {error}
           </p>
         )}
-        <div className="grid grid-cols-2 gap-2">
-          <button type="button" className="btn-secundario" onClick={onCerrar} disabled={guardando}>
+        <div className="grid grid-cols-[auto_1fr] gap-2">
+          <button type="button" className="btn-secundario px-5" onClick={onCerrar} disabled={guardando}>
             Cancelar
           </button>
-          <button className="btn-primario" disabled={guardando || !(num(precio) > 0)}>
+          <button className="btn-primario whitespace-nowrap" disabled={guardando || !(num(precio) > 0)}>
             {guardando ? <CircleNotch size={20} className="animate-spin" /> : <PlusCircle size={20} weight="bold" />}
             {guardando ? "Guardando..." : "Crear y agregar"}
           </button>
@@ -1217,8 +1218,8 @@ function FormCliente({
   const [confirmado, setConfirmado] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [guardando, setGuardando] = useState(false);
-  const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
-    setF((x) => ({ ...x, [k]: e.target.value }));
+  const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
+    setF((x) => ({ ...x, [k]: e.target.value.replace(/[\r\n]+/g, " ") }));
 
   const sugerido = tipoSugerido(f.nroIdentificacion);
   const tipo =
@@ -1264,7 +1265,9 @@ function FormCliente({
             value={f.nroIdentificacion}
             onChange={(e) => {
               setConfirmado(false);
-              set("nroIdentificacion")(e);
+              const nro = e.target.value.replace(/[\r\n]+/g, " ");
+              // Cedula/RUC se recalculan solos al escribir; pasaporte, exterior y placa elegidos a mano se respetan.
+              setF((x) => ({ ...x, nroIdentificacion: nro, idTipoIdentificacion: esTipoManual(x.idTipoIdentificacion) ? x.idTipoIdentificacion : "" }));
             }}
             required
             autoFocus={!inicial}
@@ -1310,14 +1313,21 @@ function FormCliente({
       <Campo label="Correo (recibe la factura electrónica)" id="cli-correo">
         <input id="cli-correo" className="campo" type="email" inputMode="email" maxLength={50} value={f.correo} onChange={set("correo")} />
       </Campo>
-      <div className="grid grid-cols-2 gap-3">
-        <Campo label="Teléfono" id="cli-tel">
-          <input id="cli-tel" className="campo" type="tel" maxLength={50} value={f.telefono} onChange={set("telefono")} />
-        </Campo>
-        <Campo label="Dirección" id="cli-dir">
-          <input id="cli-dir" className="campo uppercase" maxLength={50} value={f.direccion} onChange={set("direccion")} />
-        </Campo>
-      </div>
+      <Campo label="Teléfono" id="cli-tel">
+        <input id="cli-tel" className="campo" type="tel" maxLength={50} value={f.telefono} onChange={set("telefono")} />
+      </Campo>
+      <Campo label="Dirección" id="cli-dir">
+        {/* Dos lineas para leer la direccion completa; Enter no agrega saltos (se guarda en una sola linea) */}
+        <textarea
+          id="cli-dir"
+          className="campo resize-none uppercase leading-snug"
+          rows={2}
+          maxLength={50}
+          value={f.direccion}
+          onChange={set("direccion")}
+          onKeyDown={(e) => e.key === "Enter" && e.preventDefault()}
+        />
+      </Campo>
       {error && (
         <p className="flex items-start gap-2 rounded-md bg-peligro/8 px-3 py-2 text-sm text-peligro">
           <WarningCircle size={18} className="mt-px shrink-0" /> {error}
@@ -1409,7 +1419,7 @@ function HojaCobro({
 
   return (
     <Hoja titulo="Cobrar" onCerrar={guardando ? () => {} : onCerrar}>
-      <div className="mb-4 rounded-lg bg-gradient-to-br from-marca-oscuro to-marca p-4 text-center text-white">
+      <div className="mb-4 rounded-xl bg-marca-oscuro p-4 text-center text-white">
         <p className="text-xs font-semibold uppercase tracking-wider text-white/80">Total a cobrar</p>
         <p className="num text-4xl font-bold">{money(total)}</p>
         <p className="mt-1 text-xs text-white/80">{tipo === "factura" ? "Factura" : "Nota de venta"}</p>
@@ -1516,15 +1526,13 @@ function HojaCobro({
 function PantallaExito({ r, caja, onNueva }: { r: Resultado; caja: string; onNueva: () => void }) {
   return (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col">
-      <section className="barra-marca flex flex-col items-center px-6 pb-10 pt-[max(env(safe-area-inset-top),3rem)] text-center text-white">
-        <div className="anim-aparecer flex h-20 w-20 items-center justify-center rounded-full bg-white text-exito shadow-lg">
-          <CheckCircle size={56} weight="fill" />
-        </div>
-        <h1 className="mt-4 text-2xl font-bold">Venta registrada</h1>
-        <p className="num mt-1 rounded-full bg-white/15 px-3 py-1 font-mono text-sm">{r.numero}</p>
+      <section className="flex flex-col items-center px-6 pb-6 pt-[max(env(safe-area-inset-top),3rem)] text-center">
+        <CheckCircle size={84} weight="fill" className="anim-aparecer text-exito" />
+        <h1 className="mt-3 text-[28px] font-bold leading-tight tracking-tight text-texto">Venta registrada</h1>
+        <p className="num mt-1 font-mono text-[15px] text-gris">{r.numero}</p>
       </section>
-      <div className="-mt-6 flex-1 space-y-4 px-4">
-        <div className="num rounded-xl bg-white p-4 shadow-lg shadow-marca-oscuro/10">
+      <div className="flex-1 space-y-4 px-4">
+        <div className="num rounded-xl bg-white p-4">
           <div className="flex items-center justify-between text-lg">
             <span className="text-gris">Total</span>
             <span className="font-bold text-texto">{money(r.total)}</span>

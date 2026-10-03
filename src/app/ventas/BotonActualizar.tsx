@@ -10,10 +10,10 @@ export default function BotonActualizar() {
   return (
     <button
       onClick={() => iniciar(() => router.refresh())}
-      className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/15 text-white"
+      className="flex h-9 w-9 items-center justify-center rounded-full text-marca active:bg-black/5"
       aria-label="Actualizar"
     >
-      <ArrowClockwise size={20} weight="bold" className={pendiente ? "animate-spin" : ""} />
+      <ArrowClockwise size={22} className={pendiente ? "animate-spin" : ""} />
     </button>
   );
 }

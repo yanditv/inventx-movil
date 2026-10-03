@@ -26,5 +26,5 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   // Archivos de la PWA y la pantalla sin conexion quedan fuera del control de sesion.
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|icon.png|manifest.webmanifest|sw.js|icons/|offline).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|icon.png|manifest.webmanifest|sw.js|icons/|offline|api/version).*)"],
 };

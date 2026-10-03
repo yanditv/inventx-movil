@@ -14,19 +14,19 @@ export default async function PuntoPage() {
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col">
-      <header className="barra-marca pt-seguro px-4 pb-6 text-white">
+      <header className="barra-ios px-4 pb-2">
         <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-white">
-            <Logo className="h-7 w-7" />
-          </div>
+          <Logo className="h-7 w-7 shrink-0" />
           <div className="min-w-0">
-            <p className="truncate text-xs text-white/80">{empresa ?? "InventX"}</p>
-            <p className="truncate font-semibold">Hola, {sesion.nombre.split(" ")[0]}</p>
+            <p className="truncate text-[11px] text-gris">{empresa ?? "InventX"}</p>
+            <p className="truncate text-[15px] font-semibold leading-tight">Hola, {sesion.nombre.split(" ")[0]}</p>
           </div>
         </div>
-        <h1 className="mt-5 text-2xl font-bold">¿Desde qué caja va a vender?</h1>
-        <p className="text-sm text-white/80">Las ventas usarán la serie y el secuencial de esa caja.</p>
       </header>
+      <section className="px-4 pb-2 pt-4">
+        <h1 className="text-[28px] font-bold leading-tight tracking-tight text-texto">¿Desde qué caja va a vender?</h1>
+        <p className="mt-1 text-[15px] text-gris">Las ventas usarán la serie y el secuencial de esa caja.</p>
+      </section>
 
       <div className="flex-1 px-4 py-5">
         {puntos.length === 0 ? (

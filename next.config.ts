@@ -8,7 +8,12 @@ const ipsDeRed = Object.values(os.networkInterfaces())
   .filter((d) => d && d.family === "IPv4" && !d.internal)
   .map((d) => d!.address);
 
+// Identifica cada compilacion: el cliente la compara con /api/version para saber si hay una version
+// nueva publicada y recargarse (la PWA instalada no se recarga sola).
+const versionApp = process.env.VERSION_APP ?? Date.now().toString(36);
+
 const nextConfig: NextConfig = {
+  env: { VERSION_APP: versionApp },
   // mssql/tedious usan APIs de Node; se cargan sin empaquetar en el servidor.
   serverExternalPackages: ["mssql", "tedious"],
   allowedDevOrigins: [...ipsDeRed, "**.ts.net"],
