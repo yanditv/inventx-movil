@@ -1,6 +1,7 @@
 // Inicia Next.js y muestra en la terminal la direccion de red con un QR para abrirla desde el celular u otra PC.
 // Uso (desde package.json):  node scripts/servidor.mjs dev | start [--https] [-p 3000]
-// El QR usa APP_URL si existe; si no, la direccion HTTPS de Tailscale (equipo.red.ts.net) cuando responde; si no, la red local.
+// El QR usa APP_URL si existe; si no, la direccion HTTPS de Tailscale (equipo.red.ts.net), que se activa sola
+// con "tailscale serve"; si no, la red local.
 import { spawn, spawnSync } from "node:child_process";
 import os from "node:os";
 import fs from "node:fs";
@@ -18,6 +19,12 @@ const iPuerto = argsUsuario.findIndex((a) => a === "-p" || a === "--port");
 const puerto = iPuerto >= 0 ? argsUsuario[iPuerto + 1] : process.env.PORT || "3000";
 // Host: en la red local (0.0.0.0) salvo que se indique otro con -H
 const tieneHost = argsUsuario.some((a) => a === "-H" || a === "--hostname");
+
+const azul = (t) => `\x1b[36m${t}\x1b[0m`;
+const gris = (t) => `\x1b[90m${t}\x1b[0m`;
+const amarillo = (t) => `\x1b[33m${t}\x1b[0m`;
+const verde = (t) => `\x1b[32m${t}\x1b[0m`;
+const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // APP_URL desde el entorno o desde .env.local
 function leerAppUrl() {
@@ -61,28 +68,6 @@ function tailscale() {
   return null;
 }
 
-const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
-
-/**
- * Publica el puerto con HTTPS en la red Tailscale ("tailscale serve --bg <puerto>") y espera a que responda.
- * El certificado lo emite Tailscale (requiere "HTTPS Certificates" activado en la consola de Tailscale).
- * Queda activo hasta "tailscale serve reset". Se puede desactivar con TAILSCALE_SERVE=0.
- */
-async function activarTailscaleServe(ts, url) {
-  console.log(`\x1b[90m  Activando HTTPS de Tailscale: tailscale serve --bg ${puerto} ...\x1b[0m`);
-  const r = spawnSync(ts.exe, ["serve", "--bg", String(puerto)], { encoding: "utf8", timeout: 30000, windowsHide: true });
-  if (r.status !== 0) {
-    const salida = `${r.stdout ?? ""}${r.stderr ?? ""}`.trim();
-    return { ok: false, motivo: salida || "No se pudo ejecutar tailscale serve." };
-  }
-  // El primer certificado puede tardar unos segundos en emitirse.
-  for (let i = 0; i < 12; i++) {
-    if (await respondeHttps(url)) return { ok: true };
-    await esperar(3000);
-  }
-  return { ok: false, motivo: "tailscale serve quedó activo, pero la dirección todavía no responde (el certificado puede tardar un poco más)." };
-}
-
 // true si la direccion https responde con un certificado valido (fetch rechaza certificados invalidos).
 async function respondeHttps(url) {
   try {
@@ -93,43 +78,103 @@ async function respondeHttps(url) {
   }
 }
 
+/**
+ * Publica el puerto con HTTPS en la red Tailscale ("tailscale serve --bg <puerto>") y espera a que responda.
+ * El certificado lo emite Tailscale. Queda activo hasta "tailscale serve reset".
+ * Se puede desactivar con TAILSCALE_SERVE=0.
+ * Si la red aun no tiene "Serve" habilitado, devuelve el enlace de aprobacion que indica Tailscale.
+ */
+async function activarTailscaleServe(ts, url, { silencioso = false, intentos = 12 } = {}) {
+  if (!silencioso) console.log(gris(`  Activando HTTPS de Tailscale: tailscale serve --bg ${puerto} ...`));
+  const r = spawnSync(ts.exe, ["serve", "--bg", String(puerto)], { encoding: "utf8", timeout: 30000, windowsHide: true });
+  if (r.status !== 0) {
+    const salida = `${r.stdout ?? ""}${r.stderr ?? ""}`.trim();
+    // "Serve is not enabled on your tailnet. To enable, visit: https://login.tailscale.com/f/serve?node=..."
+    const enlace = salida.match(/https:\/\/login\.tailscale\.com\/\S+/)?.[0] ?? null;
+    return { ok: false, motivo: salida || "No se pudo ejecutar tailscale serve.", enlace };
+  }
+  // El primer certificado puede tardar unos segundos en emitirse.
+  for (let i = 0; i < intentos; i++) {
+    if (await respondeHttps(url)) return { ok: true };
+    await esperar(3000);
+  }
+  return { ok: false, motivo: "tailscale serve quedó activo, pero la dirección todavía no responde (el certificado puede tardar un poco más)." };
+}
+
+function abrirNavegador(url) {
+  try {
+    const [cmd, args] =
+      process.platform === "darwin" ? ["open", [url]] : process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : ["xdg-open", [url]];
+    spawn(cmd, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
+  } catch {
+    // sin navegador: el enlace ya se mostro en la terminal
+  }
+}
+
+async function imprimirQr(url, etiqueta = "") {
+  const qr = await QRCode.toString(url, { type: "terminal", small: true, errorCorrectionLevel: "M" });
+  console.log("");
+  console.log(azul("  InventX Ventas — abra la app desde el celular o desde otra PC:"));
+  console.log("");
+  console.log(qr.replace(/^/gm, "  "));
+  console.log(`  ${azul(url)}${etiqueta ? gris("  " + etiqueta) : ""}`);
+}
+
+/** Mientras el usuario aprueba "Serve" en la consola de Tailscale, reintenta y muestra el QR HTTPS al lograrlo. */
+async function esperarAprobacion(ts, url) {
+  for (let i = 0; i < 120; i++) {
+    await esperar(5000);
+    const r = await activarTailscaleServe(ts, url, { silencioso: true, intentos: 4 });
+    if (r.ok) {
+      console.log("");
+      console.log(verde("  ✓ HTTPS de Tailscale activado."));
+      await imprimirQr(url, "(Tailscale, HTTPS)");
+      console.log(gris("  Para quitarlo: tailscale serve reset"));
+      console.log("");
+      return;
+    }
+  }
+  console.log(amarillo("  No se recibió la aprobación de Tailscale Serve. Vuelva a iniciar cuando la haya aprobado."));
+}
+
 async function mostrarQr() {
   const esquema = https ? "https" : "http";
   const ips = direccionesRed();
   const lan = ips[0] ? `${esquema}://${ips[0].ip}:${puerto}` : `${esquema}://localhost:${puerto}`;
 
-  // Prioridad: APP_URL > https de Tailscale (si responde) > red local
+  // Prioridad: APP_URL > https de Tailscale (se activa solo) > red local
   const appUrl = leerAppUrl()?.replace(/\/$/, "");
   const ts = tailscale();
   const urlTs = ts ? `https://${ts.dns}` : null;
   let tsResponde = urlTs && !appUrl ? await respondeHttps(urlTs) : false;
-  let motivoTs = null;
+  let fallo = null;
   if (ts && !appUrl && !tsResponde && process.env.TAILSCALE_SERVE !== "0") {
     const r = await activarTailscaleServe(ts, urlTs);
     tsResponde = r.ok;
-    motivoTs = r.motivo ?? null;
+    if (!r.ok) fallo = r;
   }
   const principal = appUrl || (tsResponde ? urlTs : lan);
-  const qr = await QRCode.toString(principal, { type: "terminal", small: true, errorCorrectionLevel: "M" });
 
-  const azul = (t) => `\x1b[36m${t}\x1b[0m`;
-  const gris = (t) => `\x1b[90m${t}\x1b[0m`;
-  const amarillo = (t) => `\x1b[33m${t}\x1b[0m`;
-  console.log("");
-  console.log(azul("  InventX Ventas — abra la app desde el celular o desde otra PC:"));
-  console.log("");
-  console.log(qr.replace(/^/gm, "  "));
-  console.log(`  ${azul(principal)}${principal === urlTs ? gris("  (Tailscale, HTTPS)") : ""}`);
-  const otras = [...(urlTs && urlTs !== principal && tsResponde ? [urlTs] : []), ...(principal !== lan ? [lan] : [])];
+  await imprimirQr(principal, principal === urlTs ? "(Tailscale, HTTPS)" : "");
+  const otras = principal !== lan ? [lan] : [];
   for (const d of ips) {
     const url = `${esquema}://${d.ip}:${puerto}`;
     if (url !== principal && !otras.includes(url)) otras.push(url);
   }
   for (const url of otras) console.log(gris(`  también: ${url}`));
 
-  if (ts && !tsResponde && !appUrl) {
+  if (fallo?.enlace) {
+    // Paso unico por red: aprobar "Serve" en la consola de Tailscale. Se abre la pagina y se espera aqui.
+    console.log("");
+    console.log(amarillo(`  Para usar HTTPS con Tailscale (https://${ts.dns}) falta un paso único:`));
+    console.log(amarillo('  habilitar "Serve" en su red de Tailscale. Se abrió esta página en el navegador:'));
+    console.log(`  ${fallo.enlace}`);
+    console.log(gris("  Apruébelo y espere aquí: el QR con HTTPS aparecerá solo, sin reiniciar."));
+    abrirNavegador(fallo.enlace);
+    esperarAprobacion(ts, urlTs).catch(() => {});
+  } else if (fallo) {
     console.log(amarillo(`  Tailscale detectado (${ts.dns}), pero https://${ts.dns} no responde.`));
-    if (motivoTs) console.log(gris("  " + motivoTs.replace(/\n/g, "\n  ")));
+    console.log(gris("  " + fallo.motivo.replace(/\n/g, "\n  ")));
     console.log(gris('  Revise que "HTTPS Certificates" esté activado en https://login.tailscale.com/admin/dns y vuelva a iniciar.'));
   } else if (principal === urlTs) {
     console.log(gris("  HTTPS publicado con Tailscale (tailscale serve). Para quitarlo: tailscale serve reset"));
