@@ -44,8 +44,8 @@ function direccionesRed() {
   return ips.sort((a, b) => Number(a.tailscale) - Number(b.tailscale));
 }
 
-// Nombre MagicDNS de este equipo en Tailscale (equipo.red.ts.net), si Tailscale esta instalado y conectado.
-function nombreTailscale() {
+// Tailscale de este equipo: nombre MagicDNS (equipo.red.ts.net) y ejecutable, si esta instalado y conectado.
+function tailscale() {
   const candidatos = ["tailscale", "C:\\Program Files\\Tailscale\\tailscale.exe", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"];
   for (const exe of candidatos) {
     try {
@@ -53,12 +53,34 @@ function nombreTailscale() {
       if (r.status !== 0 || !r.stdout) continue;
       const estado = JSON.parse(r.stdout);
       const dns = estado?.Self?.DNSName?.replace(/\.$/, "");
-      if (estado?.BackendState === "Running" && dns?.endsWith(".ts.net")) return dns;
+      if (estado?.BackendState === "Running" && dns?.endsWith(".ts.net")) return { dns, exe };
     } catch {
       // no instalado en esa ruta
     }
   }
   return null;
+}
+
+const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Publica el puerto con HTTPS en la red Tailscale ("tailscale serve --bg <puerto>") y espera a que responda.
+ * El certificado lo emite Tailscale (requiere "HTTPS Certificates" activado en la consola de Tailscale).
+ * Queda activo hasta "tailscale serve reset". Se puede desactivar con TAILSCALE_SERVE=0.
+ */
+async function activarTailscaleServe(ts, url) {
+  console.log(`\x1b[90m  Activando HTTPS de Tailscale: tailscale serve --bg ${puerto} ...\x1b[0m`);
+  const r = spawnSync(ts.exe, ["serve", "--bg", String(puerto)], { encoding: "utf8", timeout: 30000, windowsHide: true });
+  if (r.status !== 0) {
+    const salida = `${r.stdout ?? ""}${r.stderr ?? ""}`.trim();
+    return { ok: false, motivo: salida || "No se pudo ejecutar tailscale serve." };
+  }
+  // El primer certificado puede tardar unos segundos en emitirse.
+  for (let i = 0; i < 12; i++) {
+    if (await respondeHttps(url)) return { ok: true };
+    await esperar(3000);
+  }
+  return { ok: false, motivo: "tailscale serve quedó activo, pero la dirección todavía no responde (el certificado puede tardar un poco más)." };
 }
 
 // true si la direccion https responde con un certificado valido (fetch rechaza certificados invalidos).
@@ -78,9 +100,15 @@ async function mostrarQr() {
 
   // Prioridad: APP_URL > https de Tailscale (si responde) > red local
   const appUrl = leerAppUrl()?.replace(/\/$/, "");
-  const ts = nombreTailscale();
-  const urlTs = ts ? `https://${ts}` : null;
-  const tsResponde = urlTs && !appUrl ? await respondeHttps(urlTs) : false;
+  const ts = tailscale();
+  const urlTs = ts ? `https://${ts.dns}` : null;
+  let tsResponde = urlTs && !appUrl ? await respondeHttps(urlTs) : false;
+  let motivoTs = null;
+  if (ts && !appUrl && !tsResponde && process.env.TAILSCALE_SERVE !== "0") {
+    const r = await activarTailscaleServe(ts, urlTs);
+    tsResponde = r.ok;
+    motivoTs = r.motivo ?? null;
+  }
   const principal = appUrl || (tsResponde ? urlTs : lan);
   const qr = await QRCode.toString(principal, { type: "terminal", small: true, errorCorrectionLevel: "M" });
 
@@ -100,9 +128,11 @@ async function mostrarQr() {
   for (const url of otras) console.log(gris(`  también: ${url}`));
 
   if (ts && !tsResponde && !appUrl) {
-    console.log(amarillo(`  Tailscale detectado (${ts}), pero https://${ts} aún no responde.`));
-    console.log(gris("  Para usarlo con HTTPS: instale con deploy\\instalar.ps1 (Caddy) o, para pruebas,"));
-    console.log(gris(`  ejecute: tailscale serve --bg ${puerto}   (y vuelva a iniciar)`));
+    console.log(amarillo(`  Tailscale detectado (${ts.dns}), pero https://${ts.dns} no responde.`));
+    if (motivoTs) console.log(gris("  " + motivoTs.replace(/\n/g, "\n  ")));
+    console.log(gris('  Revise que "HTTPS Certificates" esté activado en https://login.tailscale.com/admin/dns y vuelva a iniciar.'));
+  } else if (principal === urlTs) {
+    console.log(gris("  HTTPS publicado con Tailscale (tailscale serve). Para quitarlo: tailscale serve reset"));
   } else if (!principal.startsWith("https")) {
     console.log(gris("  Nota: la cámara (escáner) y la instalación de la app necesitan HTTPS: use npm run dev:https."));
   }

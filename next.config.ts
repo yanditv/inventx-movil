@@ -12,6 +12,11 @@ const nextConfig: NextConfig = {
   // mssql/tedious usan APIs de Node; se cargan sin empaquetar en el servidor.
   serverExternalPackages: ["mssql", "tedious"],
   allowedDevOrigins: [...ipsDeRed, "**.ts.net"],
+  experimental: {
+    // Detras de "tailscale serve" el navegador envia el host *.ts.net y el servidor ve localhost:
+    // se permite ese origen para que funcionen las acciones del servidor (inicio de sesion, etc.).
+    serverActions: { allowedOrigins: ["**.ts.net"] },
+  },
   async headers() {
     return [
       {
