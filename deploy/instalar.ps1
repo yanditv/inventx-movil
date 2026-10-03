@@ -97,8 +97,13 @@ $caddyfile = Join-Path $CarpetaServicio "Caddyfile"
 (Get-Content (Join-Path $PSScriptRoot "Caddyfile.plantilla") -Raw) `
   -replace "__DOMINIO__", $Dominio -replace "__PUERTO__", $Puerto -replace "__LOGS__", $logs.Replace("\", "/") |
   Set-Content -Path $caddyfile -Encoding ascii
-& $caddy validate --config $caddyfile --adapter caddyfile 2>&1 | Out-Null
-if ($LASTEXITCODE -ne 0) { & $caddy validate --config $caddyfile --adapter caddyfile; Falla "El Caddyfile no es valido" }
+# Caddy escribe su registro (nivel info) en stderr; en Windows PowerShell 5 con "Stop" eso se toma como
+# error fatal. Se valida solo por el codigo de salida.
+$ErrorActionPreference = "Continue"
+$validacion = & $caddy validate --config $caddyfile --adapter caddyfile 2>&1 | ForEach-Object { "$_" }
+$codigo = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+if ($codigo -ne 0) { $validacion | Write-Host; Falla "El Caddyfile no es valido" }
 Ok "Caddyfile: $caddyfile"
 
 # --- 4. App como tarea al iniciar Windows ------------------------------------
