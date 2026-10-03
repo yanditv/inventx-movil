@@ -26,7 +26,7 @@ Igual que en el escritorio, la venta **no descuenta stock** ni registra movimien
 
 ## Instalación en la tienda
 
-Ver **[deploy/INSTALACION.md](deploy/INSTALACION.md)**: se instala en la PC de InventX con Caddy (HTTPS) y Tailscale (VPN para los celulares) usando `deploy/instalar.ps1`.
+En PowerShell como administrador: `irm https://github.com/yanditv/inventx-movil/releases/latest/download/instalar-web.ps1 | iex` (instala o actualiza desde la última [Release](https://github.com/yanditv/inventx-movil/releases), sin Git ni Node.js). Detalles en **[deploy/INSTALACION.md](deploy/INSTALACION.md)**: se instala en la PC de InventX con Caddy (HTTPS) y Tailscale (VPN para los celulares).
 
 ## Configuración (desarrollo)
 

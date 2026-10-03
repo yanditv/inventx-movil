@@ -14,6 +14,9 @@ const versionApp = process.env.VERSION_APP ?? Date.now().toString(36);
 
 const nextConfig: NextConfig = {
   env: { VERSION_APP: versionApp },
+  // Compilacion autocontenida (.next/standalone): la Release de Windows se arma con
+  // scripts/empaquetar.mjs y se instala sin npm ni compilar en la PC de la tienda.
+  output: "standalone",
   // mssql/tedious usan APIs de Node; se cargan sin empaquetar en el servidor.
   serverExternalPackages: ["mssql", "tedious"],
   allowedDevOrigins: [...ipsDeRed, "**.ts.net"],

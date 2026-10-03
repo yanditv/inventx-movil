@@ -40,3 +40,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# paquete de la Release de Windows (scripts/empaquetar.mjs)
+/dist

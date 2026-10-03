@@ -43,6 +43,28 @@ Después, en InventX escritorio, en **Ajustes**:
 
 ## 3. Instalar la app
 
+### Opción recomendada: desde GitHub Releases (sin Git, Node.js ni compilar)
+
+Abra **PowerShell como administrador** y pegue:
+
+```powershell
+irm https://github.com/yanditv/inventx-movil/releases/latest/download/instalar-web.ps1 | iex
+```
+
+- Descarga la última versión ya compilada, que trae su propio Node.js, y la instala en `C:\InventX\inventx-movil`.
+- La primera vez abre `.env.local` en el Bloc de notas (con `SESSION_SECRET` ya generado). Complete los datos de SQL Server, guarde y cierre el Bloc de notas para continuar.
+- Luego ejecuta `deploy\instalar.ps1`, igual que la instalación manual de abajo.
+
+**Para actualizar**, pegue el mismo comando. Conserva `.env.local` y los celulares con la app instalada se recargan solos con la versión nueva.
+
+Las versiones se publican en <https://github.com/yanditv/inventx-movil/releases>. Para publicar una nueva (desarrollador):
+
+```bash
+git tag v1.0.1 && git push origin v1.0.1   # GitHub Actions compila en Windows y crea la Release
+```
+
+### Opción manual: desde el código (con Git y Node.js)
+
 1. Instalar **Node.js LTS** (<https://nodejs.org>) y **Git**.
 2. Descargar el proyecto:
    ```powershell
@@ -66,6 +88,10 @@ Después, en InventX escritorio, en **Ajustes**:
 Al terminar muestra la dirección. En el celular, con Tailscale conectado, se abre esa dirección y se toca **Instalar app**.
 
 ## Actualizar
+
+Instalada desde Releases: volver a pegar el comando `irm ... | iex` de arriba.
+
+Instalada desde el código:
 
 ```powershell
 cd C:\InventX\inventx-movil

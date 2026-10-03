@@ -1,0 +1,62 @@
+# Publica una Release lista para instalar en Windows al subir un tag de version:
+#   git tag v1.0.0 && git push origin v1.0.0
+# Compila en Windows (dependencias nativas de Windows), empaqueta con Node.js incluido y adjunta:
+#   - inventx-movil-windows.zip  (app compilada + node\node.exe + deploy\instalar.ps1)
+#   - instalar-web.ps1           (instala/actualiza con: irm .../releases/latest/download/instalar-web.ps1 | iex)
+name: Release Windows
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      VERSION_APP: ${{ github.ref_name }}
+      NEXT_TELEMETRY_DISABLED: 1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci --no-audit --no-fund
+      - run: npm run lint
+      - run: npm run build
+      - run: node scripts/empaquetar.mjs
+
+      - name: Incluir Node.js y comprimir
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/inventx-movil/node | Out-Null
+          Copy-Item (Get-Command node).Source dist/inventx-movil/node/node.exe
+          Compress-Archive -Path dist/inventx-movil -DestinationPath dist/inventx-movil-windows.zip
+          "{0:N1} MB" -f ((Get-Item dist/inventx-movil-windows.zip).Length / 1MB)
+
+      - name: Publicar la Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $notas = @"
+          ## Instalar o actualizar en la PC de la tienda
+
+          Abra **PowerShell como administrador** y pegue:
+
+          ``````powershell
+          irm https://github.com/yanditv/inventx-movil/releases/latest/download/instalar-web.ps1 | iex
+          ``````
+
+          No necesita Git, Node.js ni compilar. La primera vez abre ``.env.local`` para completar los datos de SQL Server; al actualizar conserva la configuración.
+          Requisitos y detalles: [deploy/INSTALACION.md](https://github.com/yanditv/inventx-movil/blob/$env:GITHUB_REF_NAME/deploy/INSTALACION.md).
+
+          "@
+          gh release create $env:GITHUB_REF_NAME `
+            dist/inventx-movil-windows.zip deploy/instalar-web.ps1 `
+            --title "InventX Móvil $env:GITHUB_REF_NAME" --notes $notas --generate-notes --verify-tag

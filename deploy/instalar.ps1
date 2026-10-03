@@ -37,7 +37,11 @@ function Falla($texto) { Write-Host "`nERROR: $texto" -ForegroundColor Red; exit
 
 # --- 1. Requisitos -----------------------------------------------------------
 Paso "Verificando requisitos"
-$node = (Get-Command node -ErrorAction SilentlyContinue).Source
+# Paquete de GitHub Releases: ya viene compilado (server.js) y trae su propio Node.js (node\node.exe).
+# Copia del repositorio (git clone): se compila aqui con el Node.js instalado.
+$Release = Test-Path (Join-Path $App "server.js")
+$nodeIncluido = Join-Path $App "node\node.exe"
+$node = if (Test-Path $nodeIncluido) { $nodeIncluido } else { (Get-Command node -ErrorAction SilentlyContinue).Source }
 if (-not $node) { Falla "Node.js no esta instalado. Instale la version LTS desde https://nodejs.org" }
 $versionNode = [int]((& $node -v).TrimStart("v").Split(".")[0])
 if ($versionNode -lt 20) { Falla "Se necesita Node.js 20 o superior (hay $(& $node -v))." }
@@ -60,18 +64,23 @@ if (-not (Test-Path (Join-Path $App ".env.local"))) {
 Ok ".env.local encontrado"
 
 # --- 2. Compilar la app ------------------------------------------------------
-Paso "Instalando dependencias y compilando (puede tardar unos minutos)"
+if ($Release) { Paso "Version $((Get-Content (Join-Path $App 'VERSION') -ErrorAction SilentlyContinue)) (ya compilada)" }
+else { Paso "Instalando dependencias y compilando (puede tardar unos minutos)" }
 Push-Location $App
 try {
-  & npm ci --no-audit --no-fund
-  if ($LASTEXITCODE -ne 0) { Falla "npm ci fallo" }
+  if (-not $Release) {
+    & npm ci --no-audit --no-fund
+    if ($LASTEXITCODE -ne 0) { Falla "npm ci fallo" }
+  }
   Write-Host "    Probando la conexion a SQL Server..."
   & $node scripts\probar-conexion.mjs
   if ($LASTEXITCODE -ne 0) { Falla "La app no puede conectarse a la base de datos (vea el mensaje anterior)." }
-  & npm run build
-  if ($LASTEXITCODE -ne 0) { Falla "La compilacion fallo" }
+  if (-not $Release) {
+    & npm run build
+    if ($LASTEXITCODE -ne 0) { Falla "La compilacion fallo" }
+  }
 } finally { Pop-Location }
-Ok "App compilada"
+Ok $(if ($Release) { "Conexion a SQL Server correcta" } else { "App compilada" })
 
 # --- 3. Caddy y Caddyfile ----------------------------------------------------
 Paso "Preparando Caddy"
@@ -95,12 +104,16 @@ Ok "Caddyfile: $caddyfile"
 # --- 4. App como tarea al iniciar Windows ------------------------------------
 Paso "Registrando la app ($NombreTarea)"
 $iniciar = Join-Path $CarpetaServicio "iniciar-app.cmd"
+# Release: servidor autocontenido (server.js). Repositorio: "next start".
+$comando = if ($Release) { "`"$node`" `"$App\server.js`"" } else { "`"$node`" `"$App\node_modules\next\dist\bin\next`" start -H 127.0.0.1 -p $Puerto" }
 @"
 @echo off
 rem Generado por deploy\instalar.ps1. Inicia InventX Movil solo en 127.0.0.1 (Caddy publica el HTTPS).
 cd /d "$App"
 set NODE_ENV=production
-"$node" "$App\node_modules\next\dist\bin\next" start -H 127.0.0.1 -p $Puerto >> "$logs\app.log" 2>&1
+set HOSTNAME=127.0.0.1
+set PORT=$Puerto
+$comando >> "$logs\app.log" 2>&1
 "@ | Set-Content -Path $iniciar -Encoding ascii
 
 Stop-ScheduledTask -TaskName $NombreTarea -ErrorAction SilentlyContinue
