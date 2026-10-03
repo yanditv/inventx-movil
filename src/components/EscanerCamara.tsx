@@ -6,22 +6,93 @@ import type { IScannerControls } from "@zxing/browser";
 
 export type ResultadoEscaneo = { ok: boolean; texto: string };
 
-// Un mismo codigo solo se vuelve a contar si estuvo fuera de la camara al menos este tiempo:
-// mientras el producto siga a la vista no se agrega dos veces.
-const PAUSA_MISMO_CODIGO_MS = 2500;
+// Como un escaner de mano: el mismo codigo se vuelve a contar pasado este tiempo, aunque siga a la vista.
+// Para agregar n unidades se deja el producto frente a la camara (o se vuelve a pasar) n veces.
+// Subirlo si se agregan unidades de mas; bajarlo para escanear mas rapido.
+const PAUSA_MISMO_CODIGO_MS = 1000;
 
-function pitido(ctx: AudioContext | null, ok: boolean) {
-  if (!ctx) return;
+/** Genera un WAV (PCM 16 bits mono) con una secuencia de tonos [frecuencia Hz, segundos]; 0 Hz = silencio. */
+function wav(tonos: [number, number][]) {
+  const hz = 22050;
+  const muestras: number[] = [];
+  for (const [f, s] of tonos) {
+    const n = Math.round(hz * s);
+    for (let i = 0; i < n; i++) {
+      const envolvente = Math.min(1, i / 200, (n - i) / 200); // evita el "clic" al inicio y al final
+      muestras.push(f ? Math.sin((2 * Math.PI * f * i) / hz) * 0.8 * envolvente : 0);
+    }
+  }
+  const buf = new DataView(new ArrayBuffer(44 + muestras.length * 2));
+  const txt = (o: number, s: string) => [...s].forEach((c, i) => buf.setUint8(o + i, c.charCodeAt(0)));
+  txt(0, "RIFF");
+  buf.setUint32(4, 36 + muestras.length * 2, true);
+  txt(8, "WAVEfmt ");
+  buf.setUint32(16, 16, true);
+  buf.setUint16(20, 1, true);
+  buf.setUint16(22, 1, true);
+  buf.setUint32(24, hz, true);
+  buf.setUint32(28, hz * 2, true);
+  buf.setUint16(32, 2, true);
+  buf.setUint16(34, 16, true);
+  txt(36, "data");
+  buf.setUint32(40, muestras.length * 2, true);
+  muestras.forEach((m, i) => buf.setInt16(44 + i * 2, m * 32767, true));
+  return URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+}
+
+// Se usa <audio> y no Web Audio: en iPhone Web Audio queda mudo con el switch de silencio y al
+// encender la camara. Cada elemento se "desbloquea" reproduciendolo en silencio dentro del toque
+// que abre el escaner; despues el navegador permite reproducirlo sin gesto del usuario.
+let sonidos: { ok: HTMLAudioElement; error: HTMLAudioElement } | null = null;
+export function desbloquearAudio() {
   try {
-    const osc = ctx.createOscillator();
-    const vol = ctx.createGain();
-    osc.frequency.value = ok ? 1800 : 300;
-    vol.gain.setValueAtTime(0.15, ctx.currentTime);
-    vol.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + (ok ? 0.12 : 0.3));
-    osc.connect(vol).connect(ctx.destination);
-    osc.start();
-    osc.stop(ctx.currentTime + (ok ? 0.12 : 0.3));
+    sonidos ??= {
+      ok: new Audio(wav([[1500, 0.09], [0, 0.04], [2000, 0.13]])), // "bip-bip" agudo: registrado
+      error: new Audio(wav([[300, 0.4]])), // tono grave largo: no registrado
+    };
+    for (const a of Object.values(sonidos)) {
+      a.muted = true;
+      a.play()
+        .then(() => {
+          a.pause();
+          a.currentTime = 0;
+          a.muted = false;
+        })
+        .catch(() => {});
+    }
   } catch {}
+}
+
+function pitido(ok: boolean) {
+  const a = ok ? sonidos?.ok : sonidos?.error;
+  if (!a) return;
+  a.muted = false;
+  a.currentTime = 0;
+  a.play().catch(() => {});
+}
+
+// @zxing/library 0.23 registra con console.warn cada cuadro sin codigo ("NotFoundException"):
+// sus excepciones no pasan el instanceof por un bug de herencia. No son errores; se filtran solo esas.
+const EXCEPCIONES_NORMALES = new Set(["NotFoundException", "ChecksumException", "FormatException"]);
+function silenciarAvisosZxing() {
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => {
+    const ex = args[1] as { constructor?: { kind?: string }; name?: string } | undefined;
+    const normal = EXCEPCIONES_NORMALES.has(ex?.name ?? "") || EXCEPCIONES_NORMALES.has(ex?.constructor?.kind ?? "");
+    if (normal && String(args[0]).startsWith("MultiFormatReader: non-ReaderException")) return;
+    original(...args);
+  };
+  return () => {
+    console.warn = original;
+  };
+}
+
+/** Descarga la libreria de lectura (una sola vez). Se llama al abrir la venta para que el escaner abra al instante. */
+let libreria: Promise<[typeof import("@zxing/browser"), typeof import("@zxing/library")]> | null = null;
+export function precargarEscaner() {
+  libreria ??= Promise.all([import("@zxing/browser"), import("@zxing/library")]);
+  libreria.catch(() => (libreria = null)); // si falla la red, se reintenta la proxima vez
+  return libreria;
 }
 
 function mensajeError(e: unknown) {
@@ -47,13 +118,12 @@ export default function EscanerCamara({
 }) {
   const video = useRef<HTMLVideoElement>(null);
   const controles = useRef<IScannerControls | null>(null);
-  const audio = useRef<AudioContext | null>(null);
-  const ultimo = useRef<{ codigo: string; t: number }>({ codigo: "", t: 0 });
+  const ultimo = useRef<{ codigo: string; t: number; veces: number }>({ codigo: "", t: 0, veces: 0 });
   const ocupado = useRef(false);
   const onCodigoRef = useRef(onCodigo);
   const [estado, setEstado] = useState<"iniciando" | "listo" | "error">("iniciando");
   const [error, setError] = useState("");
-  const [aviso, setAviso] = useState<(ResultadoEscaneo & { id: number }) | null>(null);
+  const [aviso, setAviso] = useState<(ResultadoEscaneo & { id: number; veces: number }) | null>(null);
   const [procesando, setProcesando] = useState(false);
   const [agregados, setAgregados] = useState(0);
   const [linterna, setLinterna] = useState<boolean | null>(null);
@@ -64,16 +134,21 @@ export default function EscanerCamara({
 
   useEffect(() => {
     let cancelado = false;
-    const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    audio.current = Ctx ? new Ctx() : null;
-    audio.current?.resume().catch(() => {});
+    let camara: Promise<MediaStream> | null = null;
+    desbloquearAudio();
+    const restaurarWarn = silenciarAvisosZxing();
 
     (async () => {
       try {
-        const [{ BrowserMultiFormatReader }, { BarcodeFormat, DecodeHintType }] = await Promise.all([
-          import("@zxing/browser"),
-          import("@zxing/library"),
-        ]);
+        // La camara se pide a la vez que se carga la libreria (antes era una despues de la otra).
+        camara = navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        });
+        const [{ BrowserMultiFormatReader, HTMLCanvasElementLuminanceSource }, { BarcodeFormat, DecodeHintType }] = await precargarEscaner();
+        // Bug de @zxing/browser (tempCanvasElement queda undefined y compara con null):
+        // sin esto TRY_HARDER falla al rotar y llena la consola de "Could not create a Canvas element".
+        (HTMLCanvasElementLuminanceSource.prototype as unknown as { tempCanvasElement: null }).tempCanvasElement ??= null;
         const hints = new Map();
         hints.set(DecodeHintType.POSSIBLE_FORMATS, [
           BarcodeFormat.EAN_13,
@@ -86,19 +161,22 @@ export default function EscanerCamara({
         ]);
         hints.set(DecodeHintType.TRY_HARDER, true);
         const lector = new BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 120 });
-        const c = await lector.decodeFromConstraints(
-          { audio: false, video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } } },
-          video.current!,
+        const stream = await camara;
+        // Si el efecto ya se desmonto (StrictMode monta dos veces) no se toca el <video>:
+        // al detenerse limpiaria el srcObject del montaje vivo y la camara quedaria en negro.
+        if (cancelado || !video.current) return stream.getTracks().forEach((t) => t.stop());
+        const c = await lector.decodeFromStream(
+          stream,
+          video.current,
           async (resultado) => {
             if (!resultado) return;
             const codigo = resultado.getText().trim();
             const ahora = Date.now();
-            if (codigo === ultimo.current.codigo && ahora - ultimo.current.t < PAUSA_MISMO_CODIGO_MS) {
-              ultimo.current.t = ahora; // sigue a la vista: se extiende la pausa
-              return;
-            }
             if (ocupado.current) return;
-            ultimo.current = { codigo, t: ahora };
+            const repetido = codigo === ultimo.current.codigo;
+            if (repetido && ahora - ultimo.current.t < PAUSA_MISMO_CODIGO_MS) return;
+            const veces = repetido ? ultimo.current.veces + 1 : 1;
+            ultimo.current = { codigo, t: ahora, veces };
             ocupado.current = true;
             setProcesando(true);
             let r: ResultadoEscaneo;
@@ -107,14 +185,15 @@ export default function EscanerCamara({
             } catch (e) {
               r = { ok: false, texto: (e as Error).message };
             }
-            pitido(audio.current, r.ok);
+            pitido(r.ok);
             try {
               navigator.vibrate?.(r.ok ? 40 : [60, 60, 60]);
             } catch {}
             if (r.ok) setAgregados((n) => n + 1);
-            setAviso({ ...r, id: ahora });
+            setAviso({ ...r, id: ahora, veces: r.ok ? veces : 1 });
             setProcesando(false);
-            ultimo.current = { codigo, t: Date.now() };
+            // La pausa cuenta desde que termina de agregarse; si fallo, la racha de "veces" se reinicia.
+            ultimo.current = { codigo, t: Date.now(), veces: r.ok ? veces : 0 };
             ocupado.current = false;
           }
         );
@@ -124,6 +203,8 @@ export default function EscanerCamara({
         if (capacidades?.torch && c.switchTorch) setLinterna(false);
         setEstado("listo");
       } catch (e) {
+        // Si fallo la libreria con la camara ya abierta, se libera para no dejarla encendida.
+        camara?.then((s) => s.getTracks().forEach((t) => t.stop())).catch(() => {});
         if (cancelado) return;
         setError(mensajeError(e));
         setEstado("error");
@@ -136,7 +217,7 @@ export default function EscanerCamara({
       cancelado = true;
       controles.current?.stop();
       controles.current = null;
-      audio.current?.close().catch(() => {});
+      restaurarWarn();
       document.body.style.overflow = o;
     };
   }, []);
@@ -153,7 +234,14 @@ export default function EscanerCamara({
 
   return (
     <div className="fixed inset-0 z-[60] flex flex-col bg-black text-white" role="dialog" aria-modal="true" aria-label="Escanear productos">
-      <video ref={video} className="absolute inset-0 h-full w-full object-cover" muted playsInline autoPlay />
+      {/* Oculto hasta que la camara entrega imagen: si no, se ve pequeño un instante y luego se expande */}
+      <video
+        ref={video}
+        className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-300 ${estado === "listo" ? "opacity-100" : "opacity-0"}`}
+        muted
+        playsInline
+        autoPlay
+      />
 
       {/* Marco guia con linea de lectura */}
       {estado === "listo" && (
@@ -220,7 +308,8 @@ export default function EscanerCamara({
                 }`}
               >
                 {aviso.ok ? <CheckCircle size={20} weight="fill" className="shrink-0" /> : <WarningCircle size={20} weight="fill" className="shrink-0" />}
-                <span className="line-clamp-2">{aviso.texto}</span>
+                <span className="line-clamp-2 flex-1">{aviso.texto}</span>
+                {aviso.veces > 1 && <span className="shrink-0 rounded-full bg-white/25 px-2 py-0.5 text-base tabular-nums">×{aviso.veces}</span>}
               </p>
             )
           )}

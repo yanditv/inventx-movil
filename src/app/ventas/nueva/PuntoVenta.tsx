@@ -40,7 +40,7 @@ import { useEnLinea } from "@/components/pwa";
 import { TIPO, tipoSugerido, validarIdentificacion } from "@/lib/identificacion";
 import { useImprimirAuto } from "@/components/preferencias";
 import BotonImprimir from "@/components/BotonImprimir";
-import EscanerCamara, { type ResultadoEscaneo } from "@/components/EscanerCamara";
+import EscanerCamara, { desbloquearAudio, precargarEscaner, type ResultadoEscaneo } from "@/components/EscanerCamara";
 
 type Linea = { uid: number; producto: Producto; cantidad: number; precioVenta: number; descuento: number; pesado?: boolean };
 let siguienteUid = 1;
@@ -495,6 +495,11 @@ function BuscadorProductos({ onAgregar }: { onAgregar: (p: Producto) => void }) 
   const input = useRef<HTMLInputElement>(null);
   const [camara, setCamara] = useState(false);
 
+  // La libreria del escaner se descarga en segundo plano para que la camara abra sin espera.
+  useEffect(() => {
+    precargarEscaner().catch(() => {});
+  }, []);
+
   async function buscar(texto: string) {
     const id = ++seq.current;
     setCargando(true);
@@ -592,7 +597,7 @@ function BuscadorProductos({ onAgregar }: { onAgregar: (p: Producto) => void }) 
         </form>
         <button
           type="button"
-          onClick={() => setCamara(true)}
+          onClick={() => { desbloquearAudio(); setCamara(true); }}
           className="btn-primario shrink-0 flex-col gap-0.5 px-3 py-1.5 text-[11px]"
           aria-label="Escanear con la cámara"
         >
