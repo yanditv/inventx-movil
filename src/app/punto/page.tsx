@@ -2,13 +2,14 @@ import { redirect } from "next/navigation";
 import { CaretRight, CashRegister, Flask, SignOut, Storefront, Broadcast } from "@phosphor-icons/react/ssr";
 import Logo from "@/components/Logo";
 import { getSesion } from "@/lib/session";
-import { getPuntosAcceso, serieDe } from "@/lib/ventas";
+import { puntosPermitidos, serieDe } from "@/lib/ventas";
 import { salir, seleccionarPunto } from "../acciones";
 
 export default async function PuntoPage() {
   const sesion = await getSesion();
   if (!sesion) redirect("/login");
-  const puntos = await getPuntosAcceso(sesion.idSucursal, sesion.idEmpresa);
+  // Solo los puntos asignados al usuario en Ajustes > Usuarios (o todos si no tiene asignados).
+  const puntos = await puntosPermitidos(sesion);
   const empresa = puntos[0]?.Empresa;
 
   return (
@@ -55,6 +56,7 @@ export default async function PuntoPage() {
                       >
                         {p.SRIAmbienteProduccion ? <Broadcast size={12} weight="bold" /> : <Flask size={12} weight="bold" />}
                         SRI {p.SRIAmbienteProduccion ? "producción" : "pruebas"}
+                        {p.EsWeb ? " · punto web" : ""}
                       </span>
                     </span>
                     <CaretRight size={20} className="text-gris transition group-hover:translate-x-0.5 group-hover:text-marca" />

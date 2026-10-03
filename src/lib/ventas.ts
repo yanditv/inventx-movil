@@ -2,6 +2,8 @@ import "server-only";
 import { AHORA, getPool, sql } from "./db";
 import { getParametros, PARAM } from "./parametros";
 import { calcularTotales, round } from "./calculos";
+import { validarIdentificacion } from "./identificacion";
+import { PERMISO, puntosAsignados, tiene } from "./seguridad";
 import type { Sesion } from "./session";
 
 // ---------------------------------------------------------------------------
@@ -15,6 +17,7 @@ export type EmpleadoLogin = {
   Usuario: string;
   IDSucursal: number;
   IDEmpresa: number;
+  IDTipoPersonal: number;
 };
 
 // Igual que LoginDAO.getUserLogin: usuario y contrasena se comparan en texto plano.
@@ -25,7 +28,7 @@ export async function validarLogin(usuario: string, password: string) {
     .input("u", sql.VarChar(50), usuario)
     .input("p", sql.VarChar(50), password)
     .query<EmpleadoLogin>(
-      `SELECT TOP 1 IDEmpleado, Nombres, Apellidos, Usuario, IDSucursal, IDEmpresa
+      `SELECT TOP 1 IDEmpleado, Nombres, Apellidos, Usuario, IDSucursal, IDEmpresa, IDTipoPersonal
          FROM dbo.Empleado
         WHERE Usuario = @u AND [Contraseña] = @p AND Estado = 1`
     );
@@ -45,16 +48,28 @@ export type PuntoAccesoInfo = {
   Sucursal: string;
   RucEmisor: string;
   Empresa: string;
+  /** Punto sin PC fija (app web), creado en Ajustes > Puntos web del escritorio. */
+  EsWeb: boolean | number;
+  /** Punto (PC) que imprime los tickets de un punto web. */
+  IDPuntoImpresion: number | null;
+  PuntoImpresion: string | null;
+  ImpresoraTicket: string | null;
 };
 
 const SELECT_PUNTO = `
   SELECT pa.IDPuntoAcceso, pa.IDSucursal, pa.IDEmpresa, pa.Descripcion, pa.VentaTipoDefault,
          pa.SRIAmbienteProduccion, pa.IDCaja, pa.PtoEmision, s.Establecimiento,
          s.Descripcion AS Sucursal, e.NroIdentificacion AS RucEmisor,
-         COALESCE(NULLIF(e.NombreComercial, ''), e.Nombre) AS Empresa
+         COALESCE(NULLIF(e.NombreComercial, ''), e.Nombre) AS Empresa,
+         CASE WHEN pa.HostConection = 'WEB' THEN 1 ELSE 0 END AS EsWeb,
+         CASE WHEN pa.HostConection = 'WEB' THEN w.IDPuntoImpresion ELSE pa.IDPuntoAcceso END AS IDPuntoImpresion,
+         CASE WHEN pa.HostConection = 'WEB' THEN pi.Descripcion ELSE pa.Descripcion END AS PuntoImpresion,
+         CASE WHEN pa.HostConection = 'WEB' THEN pi.ImpresoraDefaultTicket ELSE pa.ImpresoraDefaultTicket END AS ImpresoraTicket
     FROM dbo.PuntoAcceso pa
     JOIN dbo.Sucursal s ON s.IDSucursal = pa.IDSucursal AND s.IDEmpresa = pa.IDEmpresa
-    JOIN dbo.Empresa e ON e.IDEmpresa = s.IDEmpresa`;
+    JOIN dbo.Empresa e ON e.IDEmpresa = s.IDEmpresa
+    LEFT JOIN dbo.PuntoAccesoWeb w ON w.IDPuntoAcceso = pa.IDPuntoAcceso AND w.IDSucursal = pa.IDSucursal
+    LEFT JOIN dbo.PuntoAcceso pi ON pi.IDPuntoAcceso = w.IDPuntoImpresion AND pi.IDSucursal = pa.IDSucursal`;
 
 export async function getPuntosAcceso(idSucursal: number, idEmpresa: number) {
   const pool = await getPool();
@@ -64,6 +79,15 @@ export async function getPuntosAcceso(idSucursal: number, idEmpresa: number) {
     .input("e", sql.Int, idEmpresa)
     .query<PuntoAccesoInfo>(`${SELECT_PUNTO} WHERE pa.IDSucursal = @s AND pa.IDEmpresa = @e ORDER BY pa.IDPuntoAcceso`);
   return r.recordset;
+}
+
+/** Puntos que el usuario puede usar: los asignados en Ajustes > Usuarios, o todos los de su sucursal si no tiene asignados. */
+export async function puntosPermitidos(sesion: Pick<Sesion, "idEmpleado" | "idSucursal" | "idEmpresa" | "esAdmin">) {
+  const todos = await getPuntosAcceso(sesion.idSucursal, sesion.idEmpresa);
+  if (sesion.esAdmin) return todos;
+  const asignados = await puntosAsignados(sesion.idEmpleado);
+  if (asignados.length === 0) return todos;
+  return todos.filter((p) => asignados.some((a) => a.idPuntoAcceso === p.IDPuntoAcceso && a.idSucursal === p.IDSucursal));
 }
 
 export async function getPuntoAcceso(idPuntoAcceso: number, idSucursal: number) {
@@ -111,7 +135,10 @@ export type Cliente = {
   Correo: string;
   Telefono: string;
   Direccion: string;
+  IDTipoIdentificacion?: string;
 };
+
+const COLUMNAS_CLIENTE = "IDCliente, NroIDentificacion, Nombres, Apellidos, Correo, Telefono, Direccion, IDTipoIdentificacion";
 
 export async function getContextoVenta(sesion: Sesion) {
   if (!sesion.idPuntoAcceso) throw new ErrorVenta("Seleccione un punto de acceso");
@@ -131,7 +158,7 @@ export async function getContextoVenta(sesion: Sesion) {
     .request()
     .input("r", sql.VarChar(15), consumidorFinal)
     .query<Cliente>(
-      `SELECT TOP 1 IDCliente, NroIDentificacion, Nombres, Apellidos, Correo, Telefono, Direccion
+      `SELECT TOP 1 ${COLUMNAS_CLIENTE}
          FROM dbo.Cliente WHERE NroIDentificacion = @r`
     );
   const tipos = await pool
@@ -151,6 +178,8 @@ export async function getContextoVenta(sesion: Sesion) {
     limiteConsumidorFinal: Number(p[PARAM.LIMITE_CF] ?? 0) || null,
     tiposIdentificacion: tipos.recordset,
     cajaAbierta: await cajaAbierta(pa, p[PARAM.CONTROL_CAJA] === "1"),
+    puedeRegistrar: tiene(sesion, PERMISO.VENTAS_REGISTRAR),
+    puedeEditarClientes: tiene(sesion, PERMISO.CLIENTES),
   };
 }
 
@@ -158,7 +187,8 @@ export type ContextoVenta = Awaited<ReturnType<typeof getContextoVenta>>;
 
 async function cajaAbierta(pa: PuntoAccesoInfo, controlCaja: boolean) {
   if (!controlCaja) return true;
-  if (pa.IDCaja == null) return false;
+  // Un punto web sin caja de efectivo asignada puede vender (se configura en Ajustes > Puntos web).
+  if (pa.IDCaja == null) return Boolean(pa.EsWeb);
   const pool = await getPool();
   const r = await pool
     .request()
@@ -179,6 +209,10 @@ export type Producto = {
   PrecioMayorista: number;
   Stock: number;
   AplicaIVA: boolean;
+  /** Unidad de medida en minusculas: "unidad", "kg", "lb"... */
+  Unidad?: string | null;
+  /** Presente cuando el codigo escaneado es una etiqueta de balanza. */
+  balanza?: { plu: string; cantidad: number; precioVenta: number };
 };
 
 // ProductoDAO.getByBarCode + getByFilter: codigo exacto primero, luego coincidencias.
@@ -195,8 +229,9 @@ export async function buscarProductos(filtro: string) {
     .input("like", sql.VarChar(702), `%${escaparLike(filtro)}%`)
     .query<Producto>(
       `SELECT TOP 40 p.IDProducto, p.Codigo, p.Descripcion, p.PrecioMinorista, p.PrecioMayorista,
-              p.Stock, p.AplicaIVA
+              p.Stock, p.AplicaIVA, LOWER(u.Descripcion) AS Unidad
          FROM dbo.Producto p
+         LEFT JOIN dbo.UnidadMedida u ON u.IDUnidadMedida = p.IDUnidadMedida
         WHERE p.Activo = 1 ${excluirCompras}
           AND (p.Codigo = @q OR p.Codigo LIKE @like ESCAPE '\\' OR p.Descripcion LIKE @like ESCAPE '\\')
         ORDER BY CASE WHEN p.Codigo = @q THEN 0 ELSE 1 END, p.Descripcion`
@@ -215,7 +250,7 @@ export async function buscarClientes(filtro: string) {
     .input("like", sql.VarChar(102), `%${escaparLike(filtro)}%`)
     .input("cf", sql.VarChar(15), cf)
     .query<Cliente>(
-      `SELECT TOP 30 IDCliente, NroIDentificacion, Nombres, Apellidos, Correo, Telefono, Direccion
+      `SELECT TOP 30 ${COLUMNAS_CLIENTE}
          FROM dbo.Cliente
         WHERE Activo = 1 AND NroIDentificacion <> @cf
           AND (NroIDentificacion LIKE @like ESCAPE '\\' OR Nombres LIKE @like ESCAPE '\\' OR Apellidos LIKE @like ESCAPE '\\'
@@ -233,7 +268,16 @@ export type NuevoCliente = {
   telefono: string;
   correo: string;
   direccion: string;
+  /** El usuario confirmo una identificacion cuyo digito verificador no cumple el calculo clasico. */
+  confirmarIdentificacion?: boolean;
 };
+
+/** Revisa la identificacion: los errores de forma bloquean; el digito verificador solo pide confirmacion. */
+function revisarIdentificacion(c: NuevoCliente, tipo: string) {
+  const v = validarIdentificacion(c.nroIdentificacion, tipo);
+  if (v.error) throw new ErrorVenta(v.error);
+  if (v.advertencia && !c.confirmarIdentificacion) throw new ErrorVenta(v.advertencia, { confirmable: true });
+}
 
 // Mismos valores por defecto que frmCliente del escritorio.
 export async function crearCliente(c: NuevoCliente) {
@@ -241,6 +285,7 @@ export async function crearCliente(c: NuevoCliente) {
   if (!id || id.length > 15) throw new ErrorVenta("Numero de identificacion invalido");
   if (!c.nombres.trim()) throw new ErrorVenta("Ingrese los nombres del cliente");
   if (c.correo && !/^\S+@\S+\.\S+$/.test(c.correo.trim())) throw new ErrorVenta("Correo invalido");
+  revisarIdentificacion(c, c.idTipoIdentificacion || "05");
 
   const pool = await getPool();
   const existe = await pool
@@ -264,17 +309,91 @@ export async function crearCliente(c: NuevoCliente) {
                                 IDCiudad, IDParroquia, FechaRegistro, Descuento, Deuda, Credito,
                                 IDTipoIdentificacion, Activo, IsMayorista)
        VALUES (@id, @nom, @ape, @tel, '', @cor, 0, @dir, '0000', '000000', ${AHORA}, 0, 0, 0, @tipo, 1, 0);
-       SELECT IDCliente, NroIDentificacion, Nombres, Apellidos, Correo, Telefono, Direccion
+       SELECT ${COLUMNAS_CLIENTE}
          FROM dbo.Cliente WHERE IDCliente = CAST(SCOPE_IDENTITY() AS bigint);`
     );
   return r.recordset[0];
+}
+
+export async function getCliente(idCliente: number) {
+  const pool = await getPool();
+  const r = await pool
+    .request()
+    .input("id", sql.BigInt, idCliente)
+    .query<Cliente & { TieneVentas: number }>(
+      `SELECT ${COLUMNAS_CLIENTE},
+              CASE WHEN EXISTS (SELECT 1 FROM dbo.Venta v WHERE v.IDCliente = c.IDCliente) THEN 1 ELSE 0 END AS TieneVentas
+         FROM dbo.Cliente c WHERE c.IDCliente = @id`
+    );
+  const c = r.recordset[0];
+  return c ? { ...c, TieneVentas: Boolean(c.TieneVentas) } : null;
+}
+
+/**
+ * Edita los datos del cliente. El consumidor final no se edita, y si el cliente ya tiene ventas
+ * su identificacion queda fija (cambiarla alteraria las facturas ya emitidas).
+ */
+export async function actualizarCliente(idCliente: number, c: NuevoCliente) {
+  const actual = await getCliente(idCliente);
+  if (!actual) throw new ErrorVenta("El cliente ya no existe");
+  const p = await getParametros([PARAM.CLIENTE_DEFAULT]);
+  if (actual.NroIDentificacion.trim() === (p[PARAM.CLIENTE_DEFAULT] || "9999999999999"))
+    throw new ErrorVenta("El consumidor final no se puede editar");
+
+  const id = c.nroIdentificacion.trim();
+  if (!id || id.length > 15) throw new ErrorVenta("Numero de identificacion invalido");
+  if (!c.nombres.trim()) throw new ErrorVenta("Ingrese los nombres del cliente");
+  if (c.correo && !/^\S+@\S+\.\S+$/.test(c.correo.trim())) throw new ErrorVenta("Correo invalido");
+
+  const tipoNuevo = c.idTipoIdentificacion || actual.IDTipoIdentificacion?.trim() || "05";
+  if (id !== actual.NroIDentificacion.trim() || tipoNuevo !== actual.IDTipoIdentificacion?.trim()) revisarIdentificacion(c, tipoNuevo);
+
+  const pool = await getPool();
+  if (id !== actual.NroIDentificacion.trim()) {
+    if (actual.TieneVentas) throw new ErrorVenta("No se puede cambiar la identificación: el cliente ya tiene ventas registradas");
+    const existe = await pool
+      .request()
+      .input("r", sql.VarChar(15), id)
+      .input("id", sql.BigInt, idCliente)
+      .query(`SELECT 1 FROM dbo.Cliente WHERE NroIDentificacion = @r AND IDCliente <> @id`);
+    if (existe.recordset.length) throw new ErrorVenta("Ya existe otro cliente con esa identificación");
+  }
+
+  const corto = (s: string) => s.trim().slice(0, 50);
+  const r = await pool
+    .request()
+    .input("idCliente", sql.BigInt, idCliente)
+    .input("id", sql.VarChar(15), id)
+    .input("nom", sql.VarChar(50), corto(c.nombres).toUpperCase())
+    .input("ape", sql.VarChar(50), corto(c.apellidos).toUpperCase())
+    .input("tel", sql.VarChar(50), corto(c.telefono))
+    .input("cor", sql.VarChar(50), corto(c.correo))
+    .input("dir", sql.VarChar(50), corto(c.direccion).toUpperCase())
+    .input("tipo", sql.VarChar(2), c.idTipoIdentificacion || actual.IDTipoIdentificacion || "05")
+    .query<Cliente>(
+      `UPDATE dbo.Cliente
+          SET NroIDentificacion = @id, Nombres = @nom, Apellidos = @ape, Telefono = @tel, Correo = @cor,
+              Direccion = @dir, IDTipoIdentificacion = @tipo
+        WHERE IDCliente = @idCliente;
+       SELECT ${COLUMNAS_CLIENTE} FROM dbo.Cliente WHERE IDCliente = @idCliente;`
+    );
+  return r.recordset[0];
+}
+
+export class ErrorVenta extends Error {
+  /** true si el usuario puede confirmar y reintentar (p. ej. digito verificador no estandar). */
+  confirmable: boolean;
+  constructor(mensaje: string, opciones?: { confirmable?: boolean }) {
+    super(mensaje);
+    this.confirmable = Boolean(opciones?.confirmable);
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Registro de la venta
 // ---------------------------------------------------------------------------
 
-export class ErrorVenta extends Error {}
+
 
 export type VentaInput = {
   tipo: TipoDocumento;
@@ -282,6 +401,8 @@ export type VentaInput = {
   observaciones?: string;
   lineas: { idProducto: number; cantidad: number; precioVenta: number; descuento: number }[];
   pago: { efectivo: number; deposito: number; recibido: number };
+  /** Deja el ticket en la cola de impresion de la caja (impresion automatica). */
+  imprimir?: boolean;
 };
 
 /**
@@ -291,6 +412,7 @@ export type VentaInput = {
  * Como en el escritorio, no se descuenta stock ni se registra movimiento de caja.
  */
 export async function registrarVenta(sesion: Sesion, input: VentaInput) {
+  if (!tiene(sesion, PERMISO.VENTAS_REGISTRAR)) throw new ErrorVenta("Su rol no tiene permiso para registrar ventas");
   const ctx = await getContextoVenta(sesion);
   if (!ctx.cajaAbierta) throw new ErrorVenta("La caja no esta aperturada");
   if (input.tipo !== "factura" && input.tipo !== "nota") throw new ErrorVenta("Tipo de documento invalido");
@@ -437,13 +559,29 @@ export async function registrarVenta(sesion: Sesion, input: VentaInput) {
         `SELECT ClaveAcceso FROM dbo.Venta WHERE IDVenta = @v AND IDPuntoVenta = @p AND IDSucursal = @s`
       );
 
+    let idCola: number | null = null;
+    if (input.imprimir) {
+      const cola = await new sql.Request(tx)
+        .input("v", sql.BigInt, idVenta)
+        .input("p", sql.Int, pa.IDPuntoAcceso)
+        .input("s", sql.Int, pa.IDSucursal)
+        .input("emp", sql.BigInt, sesion.idEmpleado)
+        .query<{ IDCola: number }>(
+          `INSERT INTO dbo.ColaImpresion (IDVenta, IDPuntoVenta, IDSucursal, IDEmpleado, Origen, FechaSolicitud)
+           VALUES (@v, @p, @s, @emp, 'MOVIL', ${AHORA});
+           SELECT CAST(SCOPE_IDENTITY() AS bigint) AS IDCola;`
+        );
+      idCola = Number(cola.recordset[0].IDCola);
+    }
+
     await tx.commit();
     return {
-      idVenta,
+      idVenta: Number(idVenta),
       numero: `${prefijo} ${codigoFactura}`,
       total: totales.totalAPagar,
       vuelto,
       claveAcceso: clave.recordset[0]?.ClaveAcceso ?? "",
+      idCola,
     };
   } catch (e) {
     await tx.rollback().catch(() => {});
@@ -458,6 +596,7 @@ export async function ventasDelDia(sesion: Sesion) {
     .input("emp", sql.BigInt, sesion.idEmpleado)
     .input("s", sql.Int, sesion.idSucursal)
     .input("p", sql.Int, sesion.idPuntoAcceso ?? 0)
+    .input("todas", sql.Bit, tiene(sesion, PERMISO.VENTAS_VER_TODAS))
     .query<{
       IDVenta: number;
       PrefijoCodificacion: string;
@@ -468,12 +607,16 @@ export async function ventasDelDia(sesion: Sesion) {
       Anulada: boolean;
       Cliente: string;
       ClaveAcceso: string;
+      Vendedor: string;
     }>(
+      // Cada vendedor ve solo sus ventas, salvo que su rol tenga "Ver ventas de otros usuarios".
       `SELECT TOP 100 v.IDVenta, v.PrefijoCodificacion, v.NroSeriePuntoVenta, v.NroSecuencial, v.FechaEmision,
-              v.Total, v.Anulada, v.ClaveAcceso, LTRIM(RTRIM(c.Apellidos + ' ' + c.Nombres)) AS Cliente
+              v.Total, v.Anulada, v.ClaveAcceso, LTRIM(RTRIM(c.Apellidos + ' ' + c.Nombres)) AS Cliente,
+              LTRIM(RTRIM(em.Nombres + ' ' + em.Apellidos)) AS Vendedor
          FROM dbo.Venta v
          JOIN dbo.Cliente c ON c.IDCliente = v.IDCliente
-        WHERE v.IDEmpleado = @emp AND v.IDSucursal = @s AND v.IDPuntoVenta = @p
+         JOIN dbo.Empleado em ON em.IDEmpleado = v.IDEmpleado
+        WHERE (@todas = 1 OR v.IDEmpleado = @emp) AND v.IDSucursal = @s AND v.IDPuntoVenta = @p
           AND v.FechaEmision >= CAST(${AHORA} AS date)
         ORDER BY v.FechaEmision DESC`
     );

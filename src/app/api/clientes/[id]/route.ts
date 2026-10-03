@@ -1,19 +1,19 @@
 import { PERMISO, tiene } from "@/lib/seguridad";
-import { conSesion } from "@/lib/api";
-import { buscarClientes, crearCliente, type NuevoCliente, ErrorVenta } from "@/lib/ventas";
+import { conSesion, idValido } from "@/lib/api";
+import { actualizarCliente, ErrorVenta, getCliente, type NuevoCliente } from "@/lib/ventas";
 
-export const GET = conSesion(async (_s, req) => {
-  const q = new URL(req.url).searchParams.get("q")?.trim() ?? "";
-  if (q.length < 2) return [];
-  return buscarClientes(q.slice(0, 100));
+export const GET = conSesion(async (_s, _req, params) => {
+  const c = await getCliente(idValido(params.id));
+  if (!c) throw new ErrorVenta("El cliente ya no existe");
+  return c;
 });
 
-export const POST = conSesion(async (sesion, req) => {
+export const PUT = conSesion(async (sesion, req, params) => {
   if (!tiene(sesion, PERMISO.CLIENTES)) throw new ErrorVenta("Su rol no tiene permiso para crear o editar clientes");
   const b = (await req.json()) as Partial<NuevoCliente>;
-  return crearCliente({
+  return actualizarCliente(idValido(params.id), {
     nroIdentificacion: String(b.nroIdentificacion ?? ""),
-    idTipoIdentificacion: String(b.idTipoIdentificacion ?? "05"),
+    idTipoIdentificacion: String(b.idTipoIdentificacion ?? ""),
     nombres: String(b.nombres ?? ""),
     apellidos: String(b.apellidos ?? ""),
     telefono: String(b.telefono ?? ""),

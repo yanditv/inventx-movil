@@ -25,6 +25,8 @@ export default async function NuevaVentaPage() {
         mensaje={`Abra ${ctx.punto.Descripcion} desde InventX escritorio (Control de caja) y vuelva a intentarlo.`}
       />
     );
+  if (!ctx.puedeRegistrar)
+    return <Aviso titulo="Sin permiso para vender" mensaje="Su rol no puede registrar ventas. Pida al administrador que lo habilite en Ajustes > Permisos." />;
   if (!ctx.consumidorFinal)
     return <Aviso titulo="Falta el consumidor final" mensaje="No existe el cliente del parámetro ClienteDefault." />;
 

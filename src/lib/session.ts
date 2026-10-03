@@ -8,6 +8,12 @@ export type Sesion = {
   nombre: string;
   idSucursal: number;
   idEmpresa: number;
+  /** TipoPersonal: 1 Administrador, 3 Gerente, 4 Supervisor, 7 Vendedor... */
+  idTipoPersonal?: number;
+  /** El Administrador tiene todos los permisos. */
+  esAdmin?: boolean;
+  /** Permisos del rol (Ajustes > Permisos del escritorio). null = la base no tiene tablas de permisos. */
+  permisos?: string[] | null;
   // Se completa al elegir el punto de acceso (caja / punto de emision).
   idPuntoAcceso?: number;
 };
@@ -40,6 +46,8 @@ export async function leerToken(token: string | undefined): Promise<Sesion | nul
   if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, secreto(), { algorithms: ["HS256"] });
+    // Sesiones creadas antes de los permisos: se pide iniciar sesion de nuevo.
+    if (!("permisos" in payload)) return null;
     return payload as unknown as Sesion;
   } catch {
     return null;

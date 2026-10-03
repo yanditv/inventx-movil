@@ -1,8 +1,17 @@
 import type { NextConfig } from "next";
+import os from "node:os";
+
+// En desarrollo, permite abrir la app desde otros equipos de la red local o de Tailscale
+// (Next bloquea por defecto los recursos de desarrollo pedidos desde otro origen).
+const ipsDeRed = Object.values(os.networkInterfaces())
+  .flat()
+  .filter((d) => d && d.family === "IPv4" && !d.internal)
+  .map((d) => d!.address);
 
 const nextConfig: NextConfig = {
   // mssql/tedious usan APIs de Node; se cargan sin empaquetar en el servidor.
   serverExternalPackages: ["mssql", "tedious"],
+  allowedDevOrigins: [...ipsDeRed, "**.ts.net"],
   async headers() {
     return [
       {

@@ -82,7 +82,7 @@ export function InstalarApp({ variante = "claro" }: { variante?: "claro" | "oscu
         }}
       >
         <DownloadSimple size={20} weight="bold" />
-        Instalar app en este celular
+        Instalar la app en este equipo
       </button>
       {verAyuda && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4" onClick={() => setVerAyuda(false)}>

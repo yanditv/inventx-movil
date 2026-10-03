@@ -2,7 +2,8 @@
 
 import { redirect } from "next/navigation";
 import { cerrarSesion, crearSesion, getSesion } from "@/lib/session";
-import { getPuntoAcceso, getPuntosAcceso, marcarConexion, validarLogin } from "@/lib/ventas";
+import { marcarConexion, puntosPermitidos, validarLogin } from "@/lib/ventas";
+import { PERMISO, ROL_ADMINISTRADOR, permisosDeRol, tiene } from "@/lib/seguridad";
 
 export type EstadoLogin = { error?: string; usuario?: string };
 
@@ -23,15 +24,26 @@ export async function iniciarSesion(_prev: EstadoLogin, form: FormData): Promise
   }
   if (!emp) return { error: `El usuario ${usuario} no se encuentra registrado en el sistema`, usuario };
 
-  const puntos = await getPuntosAcceso(emp.IDSucursal, emp.IDEmpresa);
-  const sesion = {
+  const esAdmin = Number(emp.IDTipoPersonal) === ROL_ADMINISTRADOR;
+  const permisos = await permisosDeRol(Number(emp.IDTipoPersonal));
+  if (!tiene({ esAdmin, permisos }, PERMISO.APP_WEB)) {
+    return { error: "Su usuario no tiene permiso para usar la app web. Pida al administrador que lo habilite en Ajustes > Permisos.", usuario };
+  }
+  const base = {
     idEmpleado: Number(emp.IDEmpleado),
     usuario: emp.Usuario,
     nombre: `${emp.Nombres} ${emp.Apellidos}`.trim(),
     idSucursal: emp.IDSucursal,
     idEmpresa: emp.IDEmpresa,
-    idPuntoAcceso: puntos.length === 1 ? puntos[0].IDPuntoAcceso : undefined,
+    idTipoPersonal: emp.IDTipoPersonal,
+    esAdmin,
+    permisos,
   };
+  const puntos = await puntosPermitidos(base);
+  if (puntos.length === 0) {
+    return { error: "No tiene puntos de venta asignados. Pida al administrador que le asigne uno en Ajustes > Usuarios.", usuario };
+  }
+  const sesion = { ...base, idPuntoAcceso: puntos.length === 1 ? puntos[0].IDPuntoAcceso : undefined };
   await crearSesion(sesion);
   if (sesion.idPuntoAcceso) {
     await marcarConexion(sesion.idPuntoAcceso, sesion.idSucursal, sesion.idEmpleado);
@@ -44,8 +56,8 @@ export async function seleccionarPunto(form: FormData) {
   const sesion = await getSesion();
   if (!sesion) redirect("/login");
   const id = Number(form.get("idPuntoAcceso"));
-  const pa = await getPuntoAcceso(id, sesion.idSucursal);
-  if (!pa || pa.IDEmpresa !== sesion.idEmpresa) redirect("/punto");
+  const pa = (await puntosPermitidos(sesion)).find((p) => p.IDPuntoAcceso === id);
+  if (!pa) redirect("/punto");
   await crearSesion({ ...sesion, idPuntoAcceso: pa.IDPuntoAcceso });
   await marcarConexion(pa.IDPuntoAcceso, pa.IDSucursal, sesion.idEmpleado);
   redirect("/ventas");

@@ -133,3 +133,33 @@ textarea {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* "Guardar PDF" del ticket: solo el papel, al ancho de un rollo de 80 mm */
+@media print {
+  @page {
+    size: 80mm auto;
+    margin: 0;
+  }
+  html,
+  body {
+    background: #ffffff !important;
+  }
+  .ticket-papel {
+    max-width: 80mm !important;
+    box-shadow: none !important;
+  }
+}
+
+/* Linea roja que recorre el marco del escaner de codigos */
+@keyframes barrido {
+  0%,
+  100% {
+    top: 12%;
+  }
+  50% {
+    top: 86%;
+  }
+}
+.linea-escaner {
+  animation: barrido 1.8s ease-in-out infinite;
+}

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowsLeftRight,
   Bank,
   Barcode,
   CaretDown,
@@ -20,7 +21,9 @@ import {
   Package,
   PencilSimple,
   Plus,
+  Printer,
   Receipt,
+  Scales,
   Tag,
   Trash,
   UserCircle,
@@ -34,9 +37,16 @@ import {
 import { calcularTotales, money, round, subtotalLinea } from "@/lib/calculos";
 import type { Cliente, ContextoVenta, Producto, TipoDocumento } from "@/lib/ventas";
 import { useEnLinea } from "@/components/pwa";
+import { TIPO, tipoSugerido, validarIdentificacion } from "@/lib/identificacion";
+import { useImprimirAuto } from "@/components/preferencias";
+import BotonImprimir from "@/components/BotonImprimir";
+import EscanerCamara, { type ResultadoEscaneo } from "@/components/EscanerCamara";
 
-type Linea = { producto: Producto; cantidad: number; precioVenta: number; descuento: number };
-type Resultado = { numero: string; total: number; vuelto: number; claveAcceso: string };
+type Linea = { uid: number; producto: Producto; cantidad: number; precioVenta: number; descuento: number; pesado?: boolean };
+let siguienteUid = 1;
+const unidadDe = (p: Producto) => (p.Unidad === "kg" || p.Unidad === "lb" ? p.Unidad : null);
+type ClienteDetalle = Cliente & { TieneVentas: boolean };
+type Resultado = { idVenta: number; numero: string; total: number; vuelto: number; claveAcceso: string; idCola: number | null };
 type Aviso = { texto: string; tipo: "ok" | "aviso" | "error"; id: number };
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
@@ -70,18 +80,23 @@ const vibrar = (ms = 12) => {
 export default function PuntoVenta({ ctx }: { ctx: ContextoVenta }) {
   const router = useRouter();
   const enLinea = useEnLinea();
+  const imprimirAuto = useImprimirAuto();
   const cf = ctx.consumidorFinal!;
   const [tipo, setTipo] = useState<TipoDocumento>(ctx.tipoDefault);
   const [cliente, setCliente] = useState<Cliente>(cf);
   const [lineas, setLineas] = useState<Linea[]>([]);
-  const [hoja, setHoja] = useState<null | "cliente" | "cobro" | "salir" | { editar: number }>(null);
+  const [hoja, setHoja] = useState<null | "cliente" | "editarCliente" | "cobro" | "salir" | { editar: number }>(null);
   const [resultado, setResultado] = useState<Resultado | null>(null);
   const [aviso, setAviso] = useState<Aviso | null>(null);
-  const [destacado, setDestacado] = useState<{ id: number; n: number } | null>(null);
+  const [destacado, setDestacado] = useState<{ uid: number; n: number } | null>(null);
 
   const totales = useMemo(
-    () => calcularTotales(lineas.map((l) => ({ ...l, aplicaIVA: l.producto.AplicaIVA })), ctx.porcentajeIva),
-    [lineas, ctx.porcentajeIva]
+    () =>
+      calcularTotales(
+        lineas.map((l) => ({ ...l, aplicaIVA: l.producto.AplicaIVA })),
+        ctx.porcentajeIva,
+      ),
+    [lineas, ctx.porcentajeIva],
   );
   const esCF = cliente.IDCliente === cf.IDCliente;
   const unidades = lineas.reduce((s, l) => s + l.cantidad, 0);
@@ -95,21 +110,30 @@ export default function PuntoVenta({ ctx }: { ctx: ContextoVenta }) {
   const avisar = (texto: string, tipoAviso: Aviso["tipo"] = "ok") => setAviso({ texto, tipo: tipoAviso, id: Date.now() });
 
   // Venta.AgregarProducto: si ya existe suma 1, si no agrega con PrecioMinorista.
+  // Una etiqueta de balanza siempre es una linea nueva con su peso (Venta.AgregarProductoPesado).
   function agregar(p: Producto) {
     vibrar();
-    const existente = lineas.find((l) => l.producto.IDProducto === p.IDProducto);
+    if (p.balanza) {
+      const uid = siguienteUid++;
+      const { cantidad, precioVenta } = p.balanza;
+      setLineas((ls) => [...ls, { uid, producto: p, cantidad, precioVenta, descuento: 0, pesado: true }]);
+      setDestacado({ uid, n: Date.now() });
+      avisar(`${p.Descripcion}: ${cantidad.toLocaleString("es-EC", { maximumFractionDigits: 3 })} ${unidadDe(p) ?? ""}`.trim());
+      return;
+    }
+    const existente = lineas.find((l) => l.producto.IDProducto === p.IDProducto && !l.pesado);
+    const uid = existente?.uid ?? siguienteUid++;
     setLineas((ls) =>
       existente
-        ? ls.map((l) => (l.producto.IDProducto === p.IDProducto ? { ...l, cantidad: l.cantidad + 1 } : l))
-        : [...ls, { producto: p, cantidad: 1, precioVenta: Number(p.PrecioMinorista), descuento: 0 }]
+        ? ls.map((l) => (l.uid === existente.uid ? { ...l, cantidad: l.cantidad + 1 } : l))
+        : [...ls, { uid, producto: p, cantidad: 1, precioVenta: Number(p.PrecioMinorista), descuento: 0 }],
     );
-    setDestacado({ id: Number(p.IDProducto), n: Date.now() });
+    setDestacado({ uid, n: Date.now() });
     if (p.Stock <= 0) avisar(`${p.Descripcion}: sin stock`, "aviso");
     else avisar(existente ? `+1 ${p.Descripcion}` : `Agregado: ${p.Descripcion}`);
   }
 
-  const actualizar = (i: number, cambios: Partial<Linea>) =>
-    setLineas((ls) => ls.map((l, j) => (j === i ? { ...l, ...cambios } : l)));
+  const actualizar = (i: number, cambios: Partial<Linea>) => setLineas((ls) => ls.map((l, j) => (j === i ? { ...l, ...cambios } : l)));
   const quitar = (i: number) => {
     vibrar(20);
     setLineas((ls) => ls.filter((_, j) => j !== i));
@@ -124,7 +148,7 @@ export default function PuntoVenta({ ctx }: { ctx: ContextoVenta }) {
     window.scrollTo({ top: 0 });
   }
 
-  if (resultado) return <PantallaExito r={resultado} onNueva={nueva} />;
+  if (resultado) return <PantallaExito r={resultado} caja={ctx.punto.PuntoImpresion ?? ctx.punto.Descripcion} onNueva={nueva} />;
 
   return (
     <main className="mx-auto min-h-dvh max-w-md pb-48">
@@ -143,7 +167,14 @@ export default function PuntoVenta({ ctx }: { ctx: ContextoVenta }) {
               {ctx.punto.Descripcion} · {ctx.prefijos[tipo]} {ctx.serie}
             </p>
           </div>
-          <span className="rounded-full bg-white/15 px-2.5 py-1 text-xs font-semibold">IVA {ctx.porcentajeIva}%</span>
+          <Link
+            href="/ajustes"
+            className="inline-flex items-center gap-1 rounded-full bg-white/15 px-2.5 py-1 text-xs font-semibold"
+            title={imprimirAuto ? "Impresión automática activada" : "Impresión manual"}
+          >
+            <Printer size={14} weight={imprimirAuto ? "fill" : "regular"} />
+            {imprimirAuto ? "Auto" : "Manual"}
+          </Link>
         </div>
         <div role="tablist" className="mt-3 grid grid-cols-2 gap-1 rounded-lg bg-black/15 p-1 text-sm font-semibold">
           {(["factura", "nota"] as const).map((t) => (
@@ -156,7 +187,11 @@ export default function PuntoVenta({ ctx }: { ctx: ContextoVenta }) {
                 tipo === t ? "bg-white text-marca-oscuro shadow" : "text-white/85"
               }`}
             >
-              {t === "factura" ? <Receipt size={18} weight={tipo === t ? "fill" : "regular"} /> : <Note size={18} weight={tipo === t ? "fill" : "regular"} />}
+              {t === "factura" ? (
+                <Receipt size={18} weight={tipo === t ? "fill" : "regular"} />
+              ) : (
+                <Note size={18} weight={tipo === t ? "fill" : "regular"} />
+              )}
               {t === "factura" ? "Factura" : "Nota de venta"}
             </button>
           ))}
@@ -170,28 +205,37 @@ export default function PuntoVenta({ ctx }: { ctx: ContextoVenta }) {
       )}
 
       <div className="space-y-3 px-4 pt-3">
-        <button
-          onClick={() => setHoja("cliente")}
-          className="flex w-full items-center gap-3 rounded-lg border border-borde bg-white p-3 text-left transition hover:border-marca active:scale-[.99]"
-        >
-          {esCF ? (
-            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-fondo text-gris">
-              <Users size={24} weight="duotone" />
+        <div className="flex items-stretch overflow-hidden rounded-lg border border-borde bg-white transition hover:border-marca">
+          <button onClick={() => setHoja("cliente")} className="flex min-w-0 flex-1 items-center gap-3 p-3 text-left active:bg-fondo">
+            {esCF ? (
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-fondo text-gris">
+                <Users size={24} weight="duotone" />
+              </span>
+            ) : (
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-marca text-sm font-bold text-white">
+                {iniciales(cliente)}
+              </span>
+            )}
+            <span className="min-w-0 flex-1">
+              <span className="block text-[11px] font-bold uppercase tracking-wider text-gris">Cliente</span>
+              <span className="block truncate font-semibold text-texto">{esCF ? "CONSUMIDOR FINAL" : nombreCliente(cliente)}</span>
+              <span className="num block text-xs text-gris">{cliente.NroIDentificacion}</span>
             </span>
-          ) : (
-            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-marca text-sm font-bold text-white">
-              {iniciales(cliente)}
+            <span className="inline-flex items-center gap-1 text-sm font-semibold text-marca">
+              <ArrowsLeftRight size={16} weight="bold" /> Cambiar
             </span>
+          </button>
+          {!esCF && ctx.puedeEditarClientes && (
+            <button
+              onClick={() => setHoja("editarCliente")}
+              className="flex w-14 shrink-0 flex-col items-center justify-center gap-0.5 border-l border-borde text-[11px] font-semibold text-marca active:bg-fondo"
+              aria-label="Editar datos del cliente"
+            >
+              <PencilSimple size={18} weight="bold" />
+              Editar
+            </button>
           )}
-          <span className="min-w-0 flex-1">
-            <span className="block text-[11px] font-bold uppercase tracking-wider text-gris">Cliente</span>
-            <span className="block truncate font-semibold text-texto">{esCF ? "CONSUMIDOR FINAL" : nombreCliente(cliente)}</span>
-            <span className="num block text-xs text-gris">{cliente.NroIDentificacion}</span>
-          </span>
-          <span className="inline-flex items-center gap-1 text-sm font-semibold text-marca">
-            <PencilSimple size={16} weight="bold" /> Cambiar
-          </span>
-        </button>
+        </div>
 
         <BuscadorProductos onAgregar={agregar} />
 
@@ -199,7 +243,7 @@ export default function PuntoVenta({ ctx }: { ctx: ContextoVenta }) {
           <div className="flex flex-col items-center gap-2 rounded-lg border-2 border-dashed border-borde px-6 py-10 text-center">
             <Barcode size={44} weight="duotone" className="text-marca/60" />
             <p className="font-semibold text-texto">Agregue productos a la venta</p>
-            <p className="text-sm text-gris">Busque por nombre o código, o use un lector de código de barras.</p>
+            <p className="text-sm text-gris">Busque por nombre o código, o toque “Escanear” para usar la cámara.</p>
           </div>
         ) : (
           <>
@@ -214,19 +258,20 @@ export default function PuntoVenta({ ctx }: { ctx: ContextoVenta }) {
             <ul className="space-y-2">
               {lineas.map((l, i) => (
                 <li
-                  key={`${l.producto.IDProducto}-${destacado?.id === Number(l.producto.IDProducto) ? destacado.n : 0}`}
-                  className={`rounded-lg border border-borde bg-white p-3 ${
-                    destacado?.id === Number(l.producto.IDProducto) ? "anim-destello" : ""
-                  }`}
+                  key={`${l.uid}-${destacado?.uid === l.uid ? destacado.n : 0}`}
+                  className={`rounded-lg border border-borde bg-white p-3 ${destacado?.uid === l.uid ? "anim-destello" : ""}`}
                 >
                   <div className="flex items-start gap-3">
                     <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-marca/10 text-marca">
-                      <Package size={20} weight="duotone" />
+                      {l.pesado ? <Scales size={20} weight="duotone" /> : <Package size={20} weight="duotone" />}
                     </span>
                     <button className="min-w-0 flex-1 text-left" onClick={() => setHoja({ editar: i })}>
                       <p className="line-clamp-2 text-sm font-semibold leading-snug text-texto">{l.producto.Descripcion}</p>
                       <p className="num mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-gris">
-                        <span>{money(l.precioVenta)} c/u</span>
+                        <span>
+                          {money(l.precioVenta)} {unidadDe(l.producto) ? `/ ${unidadDe(l.producto)}` : "c/u"}
+                        </span>
+                        {l.pesado && <span className="font-semibold text-marca-oscuro">Balanza</span>}
                         {!l.producto.AplicaIVA && <span className="font-semibold text-[#8f57e6]">IVA 0%</span>}
                         {l.descuento > 0 && (
                           <span className="inline-flex items-center gap-0.5 font-semibold text-exito">
@@ -240,12 +285,22 @@ export default function PuntoVenta({ ctx }: { ctx: ContextoVenta }) {
                     </button>
                   </div>
                   <div className="mt-2 flex items-center justify-between pl-12">
-                    <Cantidad
-                      key={l.cantidad}
-                      valor={l.cantidad}
-                      onChange={(c) => actualizar(i, { cantidad: c })}
-                      onQuitar={() => quitar(i)}
-                    />
+                    {l.pesado ? (
+                      <span className="num inline-flex items-center gap-1.5 rounded-md bg-fondo px-3 py-2 font-bold text-texto">
+                        <Scales size={18} className="text-marca" />
+                        {l.cantidad.toLocaleString("es-EC", { minimumFractionDigits: 3 })} {unidadDe(l.producto) ?? ""}
+                        <button onClick={() => quitar(i)} className="ml-1 text-peligro" aria-label="Quitar">
+                          <Trash size={16} />
+                        </button>
+                      </span>
+                    ) : (
+                      <Cantidad
+                        key={l.cantidad}
+                        valor={l.cantidad}
+                        onChange={(c) => actualizar(i, { cantidad: c })}
+                        onQuitar={() => quitar(i)}
+                      />
+                    )}
                     <p className="num text-lg font-bold text-texto">{money(subtotalLinea(l))}</p>
                   </div>
                 </li>
@@ -260,7 +315,8 @@ export default function PuntoVenta({ ctx }: { ctx: ContextoVenta }) {
           <details className="group text-sm text-gris">
             <summary className="flex cursor-pointer list-none items-center justify-between py-1.5">
               <span>
-                {lineas.length} {lineas.length === 1 ? "producto" : "productos"} · {round(unidades, 3)} {unidades === 1 ? "unidad" : "unidades"}
+                {lineas.length} {lineas.length === 1 ? "producto" : "productos"} ·{" "}
+                {unidades.toLocaleString("es-EC", { maximumFractionDigits: 3 })} {unidades === 1 ? "unidad" : "unidades"}
               </span>
               <span className="inline-flex items-center gap-1 font-semibold text-marca">
                 Detalle <CaretDown size={14} weight="bold" className="transition group-open:rotate-180" />
@@ -297,7 +353,11 @@ export default function PuntoVenta({ ctx }: { ctx: ContextoVenta }) {
             aviso.tipo === "ok" ? "bg-texto" : aviso.tipo === "aviso" ? "bg-aviso" : "bg-peligro"
           }`}
         >
-          {aviso.tipo === "ok" ? <CheckCircle size={18} weight="fill" className="shrink-0 text-exito-claro" /> : <WarningCircle size={18} weight="fill" className="shrink-0" />}
+          {aviso.tipo === "ok" ? (
+            <CheckCircle size={18} weight="fill" className="shrink-0 text-exito-claro" />
+          ) : (
+            <WarningCircle size={18} weight="fill" className="shrink-0" />
+          )}
           <span className="truncate">{aviso.texto}</span>
         </div>
       )}
@@ -309,6 +369,18 @@ export default function PuntoVenta({ ctx }: { ctx: ContextoVenta }) {
             setCliente(c);
             setHoja(null);
             avisar(`Cliente: ${c.IDCliente === cf.IDCliente ? "Consumidor final" : nombreCliente(c)}`);
+          }}
+          onCerrar={() => setHoja(null)}
+        />
+      )}
+      {hoja === "editarCliente" && (
+        <HojaEditarCliente
+          ctx={ctx}
+          idCliente={cliente.IDCliente}
+          onGuardado={(c) => {
+            setCliente(c);
+            setHoja(null);
+            avisar(`Datos actualizados: ${nombreCliente(c)}`);
           }}
           onCerrar={() => setHoja(null)}
         />
@@ -353,6 +425,7 @@ export default function PuntoVenta({ ctx }: { ctx: ContextoVenta }) {
               method: "POST",
               body: JSON.stringify({
                 tipo,
+                imprimir: imprimirAuto,
                 idCliente: cliente.IDCliente,
                 observaciones,
                 pago,
@@ -420,6 +493,7 @@ function BuscadorProductos({ onAgregar }: { onAgregar: (p: Producto) => void }) 
   const [error, setError] = useState<string | null>(null);
   const seq = useRef(0);
   const input = useRef<HTMLInputElement>(null);
+  const [camara, setCamara] = useState(false);
 
   async function buscar(texto: string) {
     const id = ++seq.current;
@@ -468,40 +542,65 @@ function BuscadorProductos({ onAgregar }: { onAgregar: (p: Producto) => void }) 
     const texto = q.trim();
     if (!texto) return;
     const r = await buscar(texto);
-    const exacto = r.find((p) => p.Codigo.trim().toLowerCase() === texto.toLowerCase());
+    const exacto = r.find((p) => p.balanza || p.Codigo.trim().toLowerCase() === texto.toLowerCase());
     if (exacto) elegir(exacto);
     else if (r.length === 1) elegir(r[0]);
+  }
+
+  // Codigo leido con la camara: agrega el producto si el codigo coincide (o es etiqueta de balanza).
+  async function porCamara(codigo: string): Promise<ResultadoEscaneo> {
+    const r = await api<Producto[]>(`/api/productos?q=${encodeURIComponent(codigo)}`);
+    const exacto = r.find((p) => p.balanza || p.Codigo.trim().toLowerCase() === codigo.toLowerCase());
+    if (!exacto) return { ok: false, texto: `Código ${codigo} no registrado` };
+    onAgregar(exacto);
+    const peso = exacto.balanza ? ` · ${exacto.balanza.cantidad.toLocaleString("es-EC", { minimumFractionDigits: 3 })}` : "";
+    return { ok: true, texto: `${exacto.Descripcion}${peso}` };
   }
 
   const abierto = q.trim().length >= 2;
 
   return (
     <div className="relative">
-      <form onSubmit={alEnviar} className="relative">
-        <MagnifyingGlass size={20} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gris" />
-        <input
-          ref={input}
-          id="buscar-producto"
-          type="search"
-          enterKeyHint="search"
-          value={q}
-          onChange={(e) => cambiar(e.target.value)}
-          placeholder="Buscar producto o código"
-          className="campo py-3.5 pl-10 pr-11 [&::-webkit-search-cancel-button]:hidden"
-          autoComplete="off"
-        />
-        <span className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-gris">
-          {cargando ? (
-            <CircleNotch size={20} className="animate-spin text-marca" />
-          ) : q ? (
-            <button type="button" onClick={limpiar} aria-label="Limpiar búsqueda" className="flex h-full w-full items-center justify-center">
-              <X size={18} weight="bold" />
-            </button>
-          ) : (
-            <Barcode size={22} />
-          )}
-        </span>
-      </form>
+      <div className="flex gap-2">
+        <form onSubmit={alEnviar} className="relative min-w-0 flex-1">
+          <MagnifyingGlass size={20} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gris" />
+          <input
+            ref={input}
+            id="buscar-producto"
+            type="search"
+            enterKeyHint="search"
+            value={q}
+            onChange={(e) => cambiar(e.target.value)}
+            placeholder="Buscar producto o código"
+            className="campo py-3.5 pl-10 pr-11 [&::-webkit-search-cancel-button]:hidden"
+            autoComplete="off"
+          />
+          <span className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-gris">
+            {cargando ? (
+              <CircleNotch size={20} className="animate-spin text-marca" />
+            ) : q ? (
+              <button
+                type="button"
+                onClick={limpiar}
+                aria-label="Limpiar búsqueda"
+                className="flex h-full w-full items-center justify-center"
+              >
+                <X size={18} weight="bold" />
+              </button>
+            ) : null}
+          </span>
+        </form>
+        <button
+          type="button"
+          onClick={() => setCamara(true)}
+          className="btn-primario shrink-0 flex-col gap-0.5 px-3 py-1.5 text-[11px]"
+          aria-label="Escanear con la cámara"
+        >
+          <Barcode size={24} weight="bold" />
+          Escanear
+        </button>
+      </div>
+      {camara && <EscanerCamara onCodigo={porCamara} onCerrar={() => setCamara(false)} />}
       {abierto && (res.length > 0 || error || !cargando) && (
         <ul className="anim-aparecer absolute inset-x-0 top-full z-10 mt-1 max-h-[55dvh] divide-y divide-borde overflow-y-auto rounded-lg border border-borde bg-white shadow-xl">
           {error && (
@@ -519,6 +618,12 @@ function BuscadorProductos({ onAgregar }: { onAgregar: (p: Producto) => void }) 
                   <p className="line-clamp-2 text-sm font-semibold text-texto">{p.Descripcion}</p>
                   <p className="num mt-0.5 flex items-center gap-2 text-xs text-gris">
                     <span>{p.Codigo}</span>
+                    {p.balanza && (
+                      <span className="inline-flex items-center gap-1 rounded bg-marca/10 px-1.5 py-px font-semibold text-marca-oscuro">
+                        <Scales size={12} weight="bold" /> {p.balanza.cantidad.toLocaleString("es-EC", { minimumFractionDigits: 3 })}{" "}
+                        {unidadDe(p) ?? ""}
+                      </span>
+                    )}
                     <span
                       className={`rounded px-1.5 py-px font-semibold ${
                         p.Stock <= 0 ? "bg-peligro/10 text-peligro" : "bg-fondo text-texto"
@@ -528,7 +633,10 @@ function BuscadorProductos({ onAgregar }: { onAgregar: (p: Producto) => void }) 
                     </span>
                   </p>
                 </div>
-                <span className="num font-bold text-marca-oscuro">{money(p.PrecioMinorista)}</span>
+                <span className="num font-bold text-marca-oscuro">
+                  {p.balanza ? money(p.balanza.cantidad * p.balanza.precioVenta) : money(p.PrecioMinorista)}
+                  {!p.balanza && unidadDe(p) && <span className="text-xs font-normal text-gris"> /{unidadDe(p)}</span>}
+                </span>
                 <Plus size={18} weight="bold" className="text-marca" />
               </button>
             </li>
@@ -562,7 +670,11 @@ function Hoja({ titulo, onCerrar, children }: { titulo: string; onCerrar: () => 
         <div className="mx-auto mt-2 h-1.5 w-10 rounded-full bg-borde" />
         <div className="flex items-center justify-between px-4 pb-2 pt-2">
           <h2 className="text-lg font-bold text-texto">{titulo}</h2>
-          <button onClick={onCerrar} className="flex h-9 w-9 items-center justify-center rounded-full text-gris hover:bg-fondo" aria-label="Cerrar">
+          <button
+            onClick={onCerrar}
+            className="flex h-9 w-9 items-center justify-center rounded-full text-gris hover:bg-fondo"
+            aria-label="Cerrar"
+          >
             <X size={20} weight="bold" />
           </button>
         </div>
@@ -601,8 +713,13 @@ function HojaLinea({
   const c = num(cantidad);
   const pv = num(precio);
   const d = num(descuento);
-  const error =
-    !(c > 0) ? "Ingrese una cantidad mayor a cero" : !(pv >= 0) ? "Ingrese un precio válido" : d < 0 || d > pv * c ? "El descuento no puede superar el valor de la línea" : null;
+  const error = !(c > 0)
+    ? "Ingrese una cantidad mayor a cero"
+    : !(pv >= 0)
+      ? "Ingrese un precio válido"
+      : d < 0 || d > pv * c
+        ? "El descuento no puede superar el valor de la línea"
+        : null;
 
   return (
     <Hoja titulo="Editar producto" onCerrar={onCerrar}>
@@ -617,7 +734,13 @@ function HojaLinea({
       </div>
       <div className="space-y-3 pb-2">
         <Campo label="Cantidad" id="ed-cantidad">
-          <input id="ed-cantidad" className="campo num" inputMode="decimal" value={cantidad} onChange={(e) => setCantidad(e.target.value)} />
+          <input
+            id="ed-cantidad"
+            className="campo num"
+            inputMode="decimal"
+            value={cantidad}
+            onChange={(e) => setCantidad(e.target.value)}
+          />
         </Campo>
         <Campo label="Precio de venta (incluye IVA)" id="ed-precio">
           <input id="ed-precio" className="campo num" inputMode="decimal" value={precio} onChange={(e) => setPrecio(e.target.value)} />
@@ -665,19 +788,12 @@ function HojaLinea({
   );
 }
 
-function HojaCliente({
-  ctx,
-  onElegir,
-  onCerrar,
-}: {
-  ctx: ContextoVenta;
-  onElegir: (c: Cliente) => void;
-  onCerrar: () => void;
-}) {
+function HojaCliente({ ctx, onElegir, onCerrar }: { ctx: ContextoVenta; onElegir: (c: Cliente) => void; onCerrar: () => void }) {
   const [q, setQ] = useState("");
   const [res, setRes] = useState<Cliente[]>([]);
   const [cargando, setCargando] = useState(false);
   const [creando, setCreando] = useState(false);
+  const [editando, setEditando] = useState<number | null>(null);
 
   useEffect(() => {
     if (q.trim().length < 2) return;
@@ -699,10 +815,20 @@ function HojaCliente({
     };
   }, [q]);
 
+  if (editando !== null)
+    return (
+      <HojaEditarCliente ctx={ctx} idCliente={editando} onGuardado={onElegir} onCerrar={onCerrar} onVolver={() => setEditando(null)} />
+    );
+
   if (creando)
     return (
       <Hoja titulo="Nuevo cliente" onCerrar={onCerrar}>
-        <FormCliente ctx={ctx} identificacion={/^\d+$/.test(q.trim()) ? q.trim() : ""} onCreado={onElegir} onVolver={() => setCreando(false)} />
+        <FormCliente
+          ctx={ctx}
+          identificacion={/^\d+$/.test(q.trim()) ? q.trim() : ""}
+          onGuardado={onElegir}
+          onVolver={() => setCreando(false)}
+        />
       </Hoja>
     );
 
@@ -728,25 +854,27 @@ function HojaCliente({
         <button className="btn-secundario py-2.5 text-sm" onClick={() => onElegir(ctx.consumidorFinal!)}>
           <Users size={18} /> Consumidor final
         </button>
-        <button className="btn border border-marca/30 bg-marca/10 py-2.5 text-sm text-marca-oscuro" onClick={() => setCreando(true)}>
-          <UserPlus size={18} weight="bold" /> Nuevo cliente
-        </button>
+        {ctx.puedeEditarClientes && (
+          <button className="btn border border-marca/30 bg-marca/10 py-2.5 text-sm text-marca-oscuro" onClick={() => setCreando(true)}>
+            <UserPlus size={18} weight="bold" /> Nuevo cliente
+          </button>
+        )}
       </div>
       <ul className="mt-2 divide-y divide-borde pb-4">
         {!cargando && q.trim().length >= 2 && res.length === 0 && (
           <li className="py-6 text-center text-sm text-gris">
             No encontramos “{q.trim()}”.
-            <button className="mt-2 block w-full font-semibold text-marca" onClick={() => setCreando(true)}>
-              Crear cliente nuevo
-            </button>
+            {ctx.puedeEditarClientes && (
+              <button className="mt-2 block w-full font-semibold text-marca" onClick={() => setCreando(true)}>
+                Crear cliente nuevo
+              </button>
+            )}
           </li>
         )}
-        {q.trim().length < 2 && (
-          <li className="py-6 text-center text-sm text-gris">Escriba al menos 2 caracteres para buscar.</li>
-        )}
+        {q.trim().length < 2 && <li className="py-6 text-center text-sm text-gris">Escriba al menos 2 caracteres para buscar.</li>}
         {res.map((c) => (
-          <li key={c.IDCliente}>
-            <button className="flex w-full items-center gap-3 py-3 text-left active:bg-fondo" onClick={() => onElegir(c)}>
+          <li key={c.IDCliente} className="flex items-center">
+            <button className="flex min-w-0 flex-1 items-center gap-3 py-3 text-left active:bg-fondo" onClick={() => onElegir(c)}>
               <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-marca/10 text-sm font-bold text-marca-oscuro">
                 {iniciales(c)}
               </span>
@@ -758,6 +886,15 @@ function HojaCliente({
                 </span>
               </span>
             </button>
+            {ctx.puedeEditarClientes && (
+              <button
+                onClick={() => setEditando(Number(c.IDCliente))}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-marca active:bg-fondo"
+                aria-label={`Editar ${nombreCliente(c)}`}
+              >
+                <PencilSimple size={18} weight="bold" />
+              </button>
+            )}
           </li>
         ))}
       </ul>
@@ -765,48 +902,159 @@ function HojaCliente({
   );
 }
 
-function tipoPorLongitud(id: string) {
-  if (/^\d{13}$/.test(id)) return "04";
-  if (/^\d{10}$/.test(id)) return "05";
-  return "06";
+function HojaEditarCliente({
+  ctx,
+  idCliente,
+  onGuardado,
+  onCerrar,
+  onVolver,
+}: {
+  ctx: ContextoVenta;
+  idCliente: number;
+  onGuardado: (c: Cliente) => void;
+  onCerrar: () => void;
+  onVolver?: () => void;
+}) {
+  const [cliente, setCliente] = useState<ClienteDetalle | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let vigente = true;
+    api<ClienteDetalle>(`/api/clientes/${idCliente}`)
+      .then((c) => {
+        if (vigente) setCliente(c);
+      })
+      .catch((e) => {
+        if (vigente) setError((e as Error).message);
+      });
+    return () => {
+      vigente = false;
+    };
+  }, [idCliente]);
+
+  return (
+    <Hoja titulo="Editar cliente" onCerrar={onCerrar}>
+      {error ? (
+        <p className="mb-4 flex items-start gap-2 rounded-md bg-peligro/8 px-3 py-2 text-sm text-peligro">
+          <WarningCircle size={18} className="mt-px shrink-0" /> {error}
+        </p>
+      ) : !cliente ? (
+        <p className="flex items-center justify-center gap-2 py-10 text-sm text-gris">
+          <CircleNotch size={20} className="animate-spin text-marca" /> Cargando cliente...
+        </p>
+      ) : (
+        <FormCliente
+          ctx={ctx}
+          identificacion={cliente.NroIDentificacion.trim()}
+          inicial={cliente}
+          onGuardado={onGuardado}
+          onVolver={onVolver ?? onCerrar}
+        />
+      )}
+    </Hoja>
+  );
+}
+
+const NOMBRE_TIPO: Record<string, string> = {
+  [TIPO.CEDULA]: "Cédula",
+  [TIPO.RUC]: "RUC",
+  [TIPO.PASAPORTE]: "Pasaporte",
+  [TIPO.EXTERIOR]: "Del exterior",
+  [TIPO.PLACA]: "Placa",
+};
+
+function AvisoIdentificacion({
+  v,
+  confirmado,
+  onConfirmar,
+}: {
+  v: { error?: string; advertencia?: string; detalle?: string };
+  confirmado: boolean;
+  onConfirmar: (x: boolean) => void;
+}) {
+  if (v.error)
+    return (
+      <p className="-mt-1 flex items-start gap-1.5 text-sm text-peligro">
+        <WarningCircle size={16} weight="fill" className="mt-0.5 shrink-0" /> {v.error}
+      </p>
+    );
+  if (v.advertencia)
+    return (
+      <div className="-mt-1 rounded-md bg-aviso/10 p-3 text-sm text-[#92400e]">
+        <p className="flex items-start gap-1.5">
+          <WarningCircle size={16} weight="fill" className="mt-0.5 shrink-0" /> {v.advertencia}
+        </p>
+        <label className="mt-2 flex items-center gap-2 font-semibold">
+          <input type="checkbox" checked={confirmado} onChange={(e) => onConfirmar(e.target.checked)} className="h-4 w-4 accent-marca" />
+          El número es correcto, guardar igual
+        </label>
+      </div>
+    );
+  if (v.detalle)
+    return (
+      <p className="-mt-1 flex items-center gap-1.5 text-sm text-exito">
+        <CheckCircle size={16} weight="fill" /> {v.detalle}
+      </p>
+    );
+  return null;
 }
 
 function FormCliente({
   ctx,
   identificacion,
-  onCreado,
+  inicial,
+  onGuardado,
   onVolver,
 }: {
   ctx: ContextoVenta;
   identificacion: string;
-  onCreado: (c: Cliente) => void;
+  /** Si viene, el formulario edita ese cliente en lugar de crear uno nuevo. */
+  inicial?: ClienteDetalle;
+  onGuardado: (c: Cliente) => void;
   onVolver: () => void;
 }) {
   const tipos = ctx.tiposIdentificacion;
+  // Consumidor final no se crea a mano; los demas tipos se muestran con nombres cortos.
+  const tiposVisibles = tipos.filter((t) => t.IDTipoIdentificacion !== TIPO.CONSUMIDOR_FINAL);
   const [f, setF] = useState({
     nroIdentificacion: identificacion,
-    idTipoIdentificacion: "",
-    nombres: "",
-    apellidos: "",
-    telefono: "",
-    correo: "",
-    direccion: "",
+    idTipoIdentificacion: inicial?.IDTipoIdentificacion?.trim() ?? "",
+    nombres: inicial?.Nombres?.trim() ?? "",
+    apellidos: inicial?.Apellidos?.trim() ?? "",
+    telefono: inicial?.Telefono?.trim() ?? "",
+    correo: inicial?.Correo?.trim() ?? "",
+    direccion: inicial?.Direccion?.trim() ?? "",
   });
+  const idBloqueado = Boolean(inicial?.TieneVentas);
+  const [confirmado, setConfirmado] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [guardando, setGuardando] = useState(false);
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setF((x) => ({ ...x, [k]: e.target.value }));
 
-  const sugerido = tipoPorLongitud(f.nroIdentificacion.trim());
+  const sugerido = tipoSugerido(f.nroIdentificacion);
   const tipo =
-    f.idTipoIdentificacion || (tipos.some((t) => t.IDTipoIdentificacion === sugerido) ? sugerido : tipos[0]?.IDTipoIdentificacion ?? "05");
+    f.idTipoIdentificacion ||
+    (tipos.some((t) => t.IDTipoIdentificacion === sugerido) ? sugerido : (tipos[0]?.IDTipoIdentificacion ?? "05"));
+
+  // Si el numero no cambio al editar, no se vuelve a exigir confirmacion.
+  const sinCambios =
+    inicial && f.nroIdentificacion.trim() === inicial.NroIDentificacion.trim() && tipo === inicial.IDTipoIdentificacion?.trim();
+  const validacion = sinCambios ? {} : validarIdentificacion(f.nroIdentificacion, tipo);
+  const bloqueado = Boolean(validacion.error) || (Boolean(validacion.advertencia) && !confirmado);
 
   async function guardar(e: React.FormEvent) {
     e.preventDefault();
+    if (bloqueado) return;
     setGuardando(true);
     setError(null);
     try {
-      onCreado(await api<Cliente>("/api/clientes", { method: "POST", body: JSON.stringify({ ...f, idTipoIdentificacion: tipo }) }));
+      const cuerpo = JSON.stringify({ ...f, idTipoIdentificacion: tipo, confirmarIdentificacion: confirmado });
+      onGuardado(
+        inicial
+          ? await api<Cliente>(`/api/clientes/${inicial.IDCliente}`, { method: "PUT", body: cuerpo })
+          : await api<Cliente>("/api/clientes", { method: "POST", body: cuerpo }),
+      );
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -816,34 +1064,55 @@ function FormCliente({
 
   return (
     <form onSubmit={guardar} className="space-y-3 pb-4">
-      <div className="grid grid-cols-[1fr_auto] gap-2">
-        <Campo label="Identificación" id="cli-id">
-          <div className="relative">
-            <IdentificationCard size={20} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gris" />
-            <input
-              id="cli-id"
-              className="campo num pl-10"
-              inputMode="numeric"
-              maxLength={15}
-              value={f.nroIdentificacion}
-              onChange={set("nroIdentificacion")}
-              required
-              autoFocus
-            />
-          </div>
-        </Campo>
-        {tipos.length > 0 && (
-          <Campo label="Tipo" id="cli-tipo">
-            <select id="cli-tipo" className="campo pr-8" value={tipo} onChange={set("idTipoIdentificacion")}>
-              {tipos.map((t) => (
-                <option key={t.IDTipoIdentificacion} value={t.IDTipoIdentificacion}>
-                  {t.Descripcion}
-                </option>
-              ))}
-            </select>
-          </Campo>
-        )}
-      </div>
+      <Campo label="Identificación" id="cli-id">
+        <div className="relative">
+          <IdentificationCard size={20} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gris" />
+          <input
+            id="cli-id"
+            className="campo num pl-10 tracking-wide"
+            inputMode={tipo === TIPO.CEDULA || tipo === TIPO.RUC ? "numeric" : "text"}
+            autoCapitalize="characters"
+            maxLength={15}
+            value={f.nroIdentificacion}
+            onChange={(e) => {
+              setConfirmado(false);
+              set("nroIdentificacion")(e);
+            }}
+            required
+            autoFocus={!inicial}
+            disabled={idBloqueado}
+          />
+        </div>
+        {idBloqueado && <p className="mt-1 text-xs text-gris">No se puede cambiar: el cliente ya tiene ventas.</p>}
+      </Campo>
+      {tiposVisibles.length > 0 && (
+        <div role="radiogroup" aria-label="Tipo de identificación" className="-mt-1 flex flex-wrap gap-1.5">
+          {tiposVisibles.map((t) => {
+            const activo = tipo === t.IDTipoIdentificacion;
+            return (
+              <button
+                key={t.IDTipoIdentificacion}
+                type="button"
+                role="radio"
+                aria-checked={activo}
+                disabled={idBloqueado}
+                onClick={() => {
+                  setConfirmado(false);
+                  setF((x) => ({ ...x, idTipoIdentificacion: t.IDTipoIdentificacion }));
+                }}
+                className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition disabled:opacity-60 ${
+                  activo ? "border-marca bg-marca text-white" : "border-borde bg-white text-texto"
+                }`}
+              >
+                {NOMBRE_TIPO[t.IDTipoIdentificacion] ?? t.Descripcion}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {!idBloqueado && f.nroIdentificacion.trim().length >= 3 && (
+        <AvisoIdentificacion v={validacion} confirmado={confirmado} onConfirmar={setConfirmado} />
+      )}
       <Campo label="Nombres o razón social" id="cli-nom">
         <input id="cli-nom" className="campo uppercase" maxLength={50} value={f.nombres} onChange={set("nombres")} required />
       </Campo>
@@ -870,7 +1139,7 @@ function FormCliente({
         <button type="button" className="btn-secundario" onClick={onVolver}>
           <CaretLeft size={18} /> Volver
         </button>
-        <button className="btn-primario" disabled={guardando}>
+        <button className="btn-primario" disabled={guardando || bloqueado}>
           {guardando ? <CircleNotch size={20} className="animate-spin" /> : <UserCircle size={20} weight="bold" />}
           {guardando ? "Guardando..." : "Guardar"}
         </button>
@@ -978,10 +1247,24 @@ function HojaCobro({
       <div className="space-y-3">
         <div className="grid grid-cols-2 gap-3">
           <Campo label="Efectivo" id="pago-efectivo">
-            <input id="pago-efectivo" className="campo num" inputMode="decimal" value={efectivo} onFocus={(x) => x.target.select()} onChange={(x) => setEfectivo(x.target.value)} />
+            <input
+              id="pago-efectivo"
+              className="campo num"
+              inputMode="decimal"
+              value={efectivo}
+              onFocus={(x) => x.target.select()}
+              onChange={(x) => setEfectivo(x.target.value)}
+            />
           </Campo>
           <Campo label="Transferencia" id="pago-deposito">
-            <input id="pago-deposito" className="campo num" inputMode="decimal" value={deposito} onFocus={(x) => x.target.select()} onChange={(x) => setDeposito(x.target.value)} />
+            <input
+              id="pago-deposito"
+              className="campo num"
+              inputMode="decimal"
+              value={deposito}
+              onFocus={(x) => x.target.select()}
+              onChange={(x) => setDeposito(x.target.value)}
+            />
           </Campo>
         </div>
         {e > 0 && (
@@ -1019,7 +1302,14 @@ function HojaCobro({
           </div>
         </dl>
         <Campo label="Observaciones" id="pago-obs">
-          <input id="pago-obs" className="campo" value={obs} maxLength={300} placeholder="Opcional" onChange={(x) => setObs(x.target.value)} />
+          <input
+            id="pago-obs"
+            className="campo"
+            value={obs}
+            maxLength={300}
+            placeholder="Opcional"
+            onChange={(x) => setObs(x.target.value)}
+          />
         </Campo>
         {(validacion || error) && (
           <p className="flex items-start gap-2 rounded-md bg-peligro/8 px-3 py-2 text-sm text-peligro">
@@ -1035,7 +1325,7 @@ function HojaCobro({
   );
 }
 
-function PantallaExito({ r, onNueva }: { r: Resultado; onNueva: () => void }) {
+function PantallaExito({ r, caja, onNueva }: { r: Resultado; caja: string; onNueva: () => void }) {
   return (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col">
       <section className="barra-marca flex flex-col items-center px-6 pb-10 pt-[max(env(safe-area-inset-top),3rem)] text-center text-white">
@@ -1065,6 +1355,10 @@ function PantallaExito({ r, onNueva }: { r: Resultado; onNueva: () => void }) {
         </div>
       </div>
       <div className="pb-seguro grid gap-2 px-4 pt-4">
+        <BotonImprimir idVenta={r.idVenta} idColaInicial={r.idCola} caja={caja} />
+        <Link href={`/ventas/${r.idVenta}`} className="btn-secundario w-full">
+          <Receipt size={20} weight="duotone" /> Ver ticket
+        </Link>
         <button className="btn-primario w-full py-4 text-lg" onClick={onNueva}>
           <Plus size={22} weight="bold" /> Nueva venta
         </button>

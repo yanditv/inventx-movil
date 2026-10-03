@@ -8,7 +8,7 @@ const noto = Noto_Sans({ subsets: ["latin"], weight: ["400", "500", "600", "700"
 
 export const metadata: Metadata = {
   title: "InventX Ventas",
-  description: "Registre sus ventas de InventX desde el celular",
+  description: "Registre sus ventas de InventX desde el celular o la PC",
   applicationName: "InventX Ventas",
   appleWebApp: { capable: true, title: "InventX", statusBarStyle: "default" },
   icons: {

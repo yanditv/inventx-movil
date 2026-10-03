@@ -1,0 +1,24 @@
+# InventX Movil detras de Caddy, accesible por la VPN de Tailscale.
+# instalar.ps1 reemplaza __DOMINIO__ y __PUERTO__ y guarda el resultado como Caddyfile.
+#
+# El certificado HTTPS de un nombre *.ts.net lo entrega el Tailscale de este equipo
+# (requiere MagicDNS y "HTTPS Certificates" activados en la consola de Tailscale).
+
+__DOMINIO__ {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+
+	# La app Next.js solo escucha en 127.0.0.1: el unico acceso desde afuera es este.
+	reverse_proxy 127.0.0.1:__PUERTO__
+
+	log {
+		output file "__LOGS__\caddy.log" {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}

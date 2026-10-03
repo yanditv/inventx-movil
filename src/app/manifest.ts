@@ -5,7 +5,7 @@ export default function manifest(): MetadataRoute.Manifest {
     id: "/",
     name: "InventX Ventas",
     short_name: "InventX",
-    description: "Registre sus ventas de InventX desde el celular",
+    description: "Registre sus ventas de InventX desde el celular o la PC",
     lang: "es-EC",
     start_url: "/ventas",
     scope: "/",

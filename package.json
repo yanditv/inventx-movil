@@ -3,18 +3,21 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "node scripts/servidor.mjs dev",
     "build": "next build",
-    "start": "next start",
+    "start": "node scripts/servidor.mjs start",
     "lint": "eslint",
-    "dev:https": "next dev --experimental-https -H 0.0.0.0",
+    "dev:https": "node scripts/servidor.mjs dev --https",
     "iconos": "node scripts/generar-iconos.mjs"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",
+    "@zxing/browser": "^0.2.1",
+    "@zxing/library": "^0.23.0",
     "jose": "^6.2.12",
     "mssql": "^12.7.2",
     "next": "16.3.8",
+    "qrcode": "^1.5.4",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "server-only": "^0.0.1"

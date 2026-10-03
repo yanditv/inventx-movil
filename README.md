@@ -24,12 +24,16 @@ Se respetan estos parámetros: `ClienteDefault`, `PrefijoCodificacionFacturas`, 
 
 Igual que en el escritorio, la venta **no descuenta stock** ni registra movimiento de caja.
 
-## Configuración
+## Instalación en la tienda
+
+Ver **[deploy/INSTALACION.md](deploy/INSTALACION.md)**: se instala en la PC de InventX con Caddy (HTTPS) y Tailscale (VPN para los celulares) usando `deploy/instalar.ps1`.
+
+## Configuración (desarrollo)
 
 ```bash
 cp .env.example .env.local   # completar servidor, usuario y contraseña de SQL Server
 npm install
-npm run dev                  # desarrollo: http://localhost:3000
+npm run dev                  # desarrollo; muestra en la terminal un QR con la dirección de red
 npm run build && npm start   # producción
 ```
 
