@@ -1,36 +1,43 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# InventX Móvil
 
-## Getting Started
+Versión web para celular de InventX (Next.js). Se conecta **directamente a la misma base de datos SQL Server** que usa la aplicación de escritorio, así que las ventas aparecen en InventX igual que las que se registran en caja.
 
-First, run the development server:
+## Pantallas
+
+- **/login**: usuario y contraseña de la tabla `Empleado`, igual que `frmLogin`. Solo pueden entrar empleados con `Estado = 1`.
+- **/punto**: elección del punto de acceso (serie `establecimiento-ptoEmision`). Si la sucursal tiene uno solo, se elige automáticamente.
+- **/ventas**: resumen y lista de las ventas del día del usuario.
+- **/ventas/nueva**: registro de una venta. Tiene factura o nota de venta, cliente (buscar o crear), productos (buscar por nombre o código, compatible con lector de código de barras), cantidades, precio minorista o mayorista, descuentos y cobro (efectivo, depósito o crédito, con recibido y vuelto).
+
+## Cómo se guarda una venta
+
+Se replica `VentaDAO.Add` del escritorio dentro de una sola transacción:
+
+1. El secuencial se calcula como `MAX + 1` por sucursal, punto, serie, prefijo y ambiente. Se usa `UPDLOCK, HOLDLOCK` para que dos dispositivos no obtengan el mismo número.
+2. `INSERT Pago`.
+3. `INSERT Venta`. El trigger `createDocumentoElectronicoVenta` genera la clave de acceso y el `DocumentoElectronico` de las facturas. El envío al SRI lo sigue haciendo el servicio de InventX escritorio.
+4. `INSERT VentaDetalleProducto`.
+
+Los totales se calculan igual que en `Venta.Partial.cs`: el precio incluye IVA y el porcentaje viene del parámetro `IVA`. El servidor recalcula todo y toma `AplicaIVA` de la base, no del navegador.
+
+Se respetan estos parámetros: `ClienteDefault`, `PrefijoCodificacionFacturas`, `PrefijoCodificacionNotaVentas`, `CONTROLCAJA` (exige caja abierta), `LimitAmoutDefault`, `COBROENEFECTIVO` y `COMPRASCOMOGASTOS`.
+
+Igual que en el escritorio, la venta **no descuenta stock** ni registra movimiento de caja.
+
+## Configuración
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cp .env.example .env.local   # completar servidor, usuario y contraseña de SQL Server
+npm install
+npm run dev                  # desarrollo: http://localhost:3000
+npm run build && npm start   # producción
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## PWA (app instalable)
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- **Manifest**: `src/app/manifest.ts`. Los íconos de `public/icons` salen del logo de InventX escritorio (`npm run iconos`).
+- **Service worker**: `public/sw.js`. Guarda en caché los archivos estáticos y muestra `/offline` cuando no hay red. Las ventas y búsquedas siempre van al servidor; nunca se guardan datos de ventas en el celular. Solo se registra en producción (`npm run build && npm start`).
+- **Instalación**: el botón "Instalar app" aparece en el login y en la lista de ventas (Android/Chrome). En iPhone muestra los pasos de Safari.
+- **Requisito**: el navegador solo permite instalar la app desde **HTTPS** (o `localhost`). Para probar en la red local: `npm run dev:https`. En producción hay que publicarla detrás de un certificado, por ejemplo con un proxy inverso (Caddy, IIS) o un túnel (Cloudflare Tunnel).
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Para usarlo desde el celular, el servidor Next.js debe poder llegar a SQL Server, y el celular debe poder llegar al servidor Next.js (misma red o publicado con HTTPS). Desde la misma red: `npm start -- -H 0.0.0.0` y abrir `http://IP-del-servidor:3000`. En el celular se puede "Agregar a pantalla de inicio" para usarlo como app.

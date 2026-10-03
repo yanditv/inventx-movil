@@ -1,26 +1,135 @@
 @import "tailwindcss";
 
+/*
+  Paleta tomada de InventX escritorio:
+  - marca #5E94FF: color de los botones Guna2 (Ingresar) y del borde al enfocar
+  - marca-oscuro #286090 / marca-medio #4582B8: azules del menu principal (hover)
+  - azul #2A8CFF -> magenta #F7208F: degradado del panel del login
+  - fondo #F7F7F7, bordes #E0E0E0, texto #404040, gris #8A8A8A: neutros de los formularios
+  - exito #13EA8C / peligro #DD1D56: verde y rojo de los botones de accion
+*/
+@theme {
+  --color-marca: #5e94ff;
+  --color-marca-medio: #4582b8;
+  --color-marca-oscuro: #286090;
+  --color-azul: #2a8cff;
+  --color-magenta: #f7208f;
+  --color-fondo: #f7f7f7;
+  --color-borde: #e0e0e0;
+  --color-texto: #404040;
+  --color-gris: #8a8a8a;
+  --color-exito: #0fb57a;
+  --color-exito-claro: #13ea8c;
+  --color-peligro: #dd1d56;
+  --color-aviso: #f59e0b;
+  --font-sans: "Segoe UI", var(--font-noto), system-ui, -apple-system, Roboto, Arial, sans-serif;
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: light;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+html,
+body {
+  background: var(--color-fondo);
+  color: var(--color-texto);
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+input,
+select,
+textarea {
+  font-size: 16px; /* evita el zoom automatico de iOS al enfocar */
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-marca);
+  outline-offset: 2px;
+}
+
+@utility campo {
+  @apply w-full rounded-[6px] border border-borde bg-white px-3 py-3 text-texto outline-none transition placeholder:text-[#a0a0a0] hover:border-marca focus:border-marca focus:ring-3 focus:ring-marca/20;
+}
+
+@utility btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-[6px] px-4 py-3 font-semibold transition select-none active:scale-[.98] disabled:pointer-events-none disabled:opacity-50;
+}
+
+@utility btn-primario {
+  @apply btn bg-marca text-white shadow-sm shadow-marca/30 hover:bg-marca-medio;
+}
+
+@utility btn-exito {
+  @apply btn bg-exito text-white shadow-sm shadow-exito/30 hover:brightness-95;
+}
+
+@utility btn-secundario {
+  @apply btn border border-borde bg-white text-texto hover:bg-fondo;
+}
+
+@utility pb-seguro {
+  padding-bottom: max(env(safe-area-inset-bottom), 0.75rem);
+}
+
+@utility pt-seguro {
+  padding-top: max(env(safe-area-inset-top), 0.75rem);
+}
+
+@utility num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Degradado del panel del login de escritorio */
+@utility fondo-marca {
+  background: linear-gradient(150deg, #2a8cff 0%, #8f57e6 48%, #f7208f 100%);
+}
+
+@utility barra-marca {
+  background: linear-gradient(120deg, #286090 0%, #4582b8 55%, #5e94ff 100%);
+}
+
+@keyframes destello {
+  from {
+    background-color: rgb(94 148 255 / 0.18);
+  }
+  to {
+    background-color: #ffffff;
   }
 }
+@keyframes subir {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+@keyframes aparecer {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@utility anim-destello {
+  animation: destello 0.9s ease-out;
+}
+@utility anim-subir {
+  animation: subir 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@utility anim-aparecer {
+  animation: aparecer 0.2s ease-out;
+}
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }
